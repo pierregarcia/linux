@@ -1258,7 +1258,7 @@ static int bcm_sendmsg(struct kiocb *iocb, struct socket *sock,
 		/* no bound device as default => check msg_name */
 		DECLARE_SOCKADDR(struct sockaddr_can *, addr, msg->msg_name);
 
-		if (msg->msg_namelen < sizeof(*addr))
+		if (msg->msg_namelen < required_size(can_ifindex, *addr))
 			return -EINVAL;
 
 		if (addr->can_family != AF_CAN)
@@ -1500,7 +1500,7 @@ static int bcm_connect(struct socket *sock, struct sockaddr *uaddr, int len,
 	struct sock *sk = sock->sk;
 	struct bcm_sock *bo = bcm_sk(sk);
 
-	if (len < sizeof(*addr))
+	if (len < required_size(can_ifindex, *addr))
 		return -EINVAL;
 
 	if (bo->bound)
