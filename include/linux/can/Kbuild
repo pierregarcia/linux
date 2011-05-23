@@ -2,3 +2,4 @@ header-y += raw.h
 header-y += bcm.h
 header-y += error.h
 header-y += netlink.h
+header-y += j1939.h

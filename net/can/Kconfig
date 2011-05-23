@@ -41,4 +41,6 @@ config CAN_BCM
 	  To use the Broadcast Manager, use AF_CAN with protocol CAN_BCM.
 
 
+source "net/can/j1939/Kconfig"
+
 source "drivers/net/can/Kconfig"
