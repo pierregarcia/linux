@@ -145,6 +145,9 @@ static int can_create(struct net *net, struct socket *sock, int protocol,
 
 	sock->state = SS_UNCONNECTED;
 
+	if (protocol < 0 || protocol >= CAN_NPROTO)
+		return -EINVAL;
+
 	if (!net_eq(net, &init_net))
 		return -EAFNOSUPPORT;
 
@@ -200,7 +203,7 @@ static int can_create(struct net *net, struct socket *sock, int protocol,
 	}
 
  errout:
-	module_put(cp->prot->owner);
+	can_put_proto(cp);
 	return err;
 }
 
