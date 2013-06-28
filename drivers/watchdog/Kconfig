@@ -934,6 +934,13 @@ config SBC_EPX_C3_WATCHDOG
 	  To compile this driver as a module, choose M here: the
 	  module will be called sbc_epx_c3.
 
+config SCH5017_WDT
+	tristate "SCH5017 watchdog"
+	depends on X86
+	---help---
+	  This is the driver for the watchdog timer on the
+	  SCH5017 South-Bridge.
+
 # M32R Architecture
 
 # M68K Architecture
