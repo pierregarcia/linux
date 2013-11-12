@@ -99,15 +99,13 @@ struct j1939_segment {
 
 extern void put_j1939_ecu(struct j1939_ecu *ecu);
 extern void put_j1939_segment(struct j1939_segment *segment);
-static inline struct j1939_ecu *get_j1939_ecu(struct j1939_ecu *dut)
+static inline void get_j1939_ecu(struct j1939_ecu *dut)
 {
 	kref_get(&dut->kref);
-	return dut;
 }
-static inline struct j1939_segment *get_j1939_segment(struct j1939_segment *dut)
+static inline void get_j1939_segment(struct j1939_segment *dut)
 {
 	kref_get(&dut->kref);
-	return dut;
 }
 
 /*
