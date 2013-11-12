@@ -22,8 +22,8 @@
 
 #include "j1939-priv.h"
 
-#define jseg_dbg(jseg, fmt, ...) \
-	pr_debug("j1939-%i: " fmt, (jseg)->ifindex, ##__VA_ARGS__)
+#define priv_dbg(priv, fmt, ...) \
+	pr_debug("j1939-%i: " fmt, (priv)->ifindex, ##__VA_ARGS__)
 
 #define ecu_dbg(ecu, fmt, ...) \
 	pr_debug("j1939-%i,%016llx,%02x: " fmt, (ecu)->parent->ifindex, \
@@ -37,34 +37,34 @@ static struct {
 	spinlock_t lock;
 } segments;
 
-struct j1939_segment *j1939_segment_find(int ifindex)
+struct j1939_priv *j1939_priv_find(int ifindex)
 {
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 
 	spin_lock_bh(&segments.lock);
-	list_for_each_entry(jseg, &segments.list, flist) {
-		if (jseg->ifindex == ifindex) {
-			get_j1939_segment(jseg);
+	list_for_each_entry(priv, &segments.list, flist) {
+		if (priv->ifindex == ifindex) {
+			get_j1939_priv(priv);
 			goto found;
 		}
 	}
-	jseg = NULL;
+	priv = NULL;
 found:
 	spin_unlock_bh(&segments.lock);
-	return jseg;
+	return priv;
 }
 
 /*
  * iterate over ECU's,
  * and register flagged ecu's on their claimed SA
  */
-static void j1939_segment_ac_task(unsigned long val)
+static void j1939_priv_ac_task(unsigned long val)
 {
-	struct j1939_segment *jseg = (void *)val;
+	struct j1939_priv *priv = (void *)val;
 	struct j1939_ecu *ecu;
 
-	write_lock_bh(&jseg->lock);
-	list_for_each_entry(ecu, &jseg->ecus, list) {
+	write_lock_bh(&priv->lock);
+	list_for_each_entry(ecu, &priv->ecus, list) {
 		/* next 2 (read & set) could be merged into xxx? */
 		if (!atomic_read(&ecu->ac_delay_expired))
 			continue;
@@ -72,55 +72,55 @@ static void j1939_segment_ac_task(unsigned long val)
 		if (j1939_address_is_unicast(ecu->sa))
 			ecu->parent->ents[ecu->sa].ecu = ecu;
 	}
-	write_unlock_bh(&jseg->lock);
+	write_unlock_bh(&priv->lock);
 }
 /*
  * segment device interface
  */
-static void cb_put_j1939_segment(struct kref *kref)
+static void cb_put_j1939_priv(struct kref *kref)
 {
-	struct j1939_segment *jseg =
-		container_of(kref, struct j1939_segment, kref);
+	struct j1939_priv *priv =
+		container_of(kref, struct j1939_priv, kref);
 
-	tasklet_disable_nosync(&jseg->ac_task);
-	kfree(jseg);
+	tasklet_disable_nosync(&priv->ac_task);
+	kfree(priv);
 }
 
-void put_j1939_segment(struct j1939_segment *segment)
+void put_j1939_priv(struct j1939_priv *segment)
 {
-	kref_put(&segment->kref, cb_put_j1939_segment);
+	kref_put(&segment->kref, cb_put_j1939_priv);
 }
 
-int j1939_segment_register(struct net_device *netdev)
+int j1939_priv_register(struct net_device *netdev)
 {
 	int ret;
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 
-	jseg = j1939_segment_find(netdev->ifindex);
-	if (jseg) {
-		put_j1939_segment(jseg);
+	priv = j1939_priv_find(netdev->ifindex);
+	if (priv) {
+		put_j1939_priv(priv);
 		ret = -EALREADY;
 		goto fail_exist;
 	}
-	jseg = kzalloc(sizeof(*jseg), GFP_KERNEL);
-	if (!jseg) {
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+	if (!priv) {
 		ret = -ENOMEM;
 		goto fail_malloc;
 	}
-	tasklet_init(&jseg->ac_task, j1939_segment_ac_task,
-			(unsigned long)jseg);
-	rwlock_init(&jseg->lock);
-	INIT_LIST_HEAD(&jseg->ecus);
-	INIT_LIST_HEAD(&jseg->flist);
-	jseg->ifindex = netdev->ifindex;
+	tasklet_init(&priv->ac_task, j1939_priv_ac_task,
+			(unsigned long)priv);
+	rwlock_init(&priv->lock);
+	INIT_LIST_HEAD(&priv->ecus);
+	INIT_LIST_HEAD(&priv->flist);
+	priv->ifindex = netdev->ifindex;
 
-	kref_init(&jseg->kref);
+	kref_init(&priv->kref);
 
 	spin_lock_bh(&segments.lock);
-	list_add_tail(&jseg->flist, &segments.list);
+	list_add_tail(&priv->flist, &segments.list);
 	spin_unlock_bh(&segments.lock);
 
-	jseg_dbg(jseg, "register\n");
+	priv_dbg(priv, "register\n");
 	return 0;
 
 fail_malloc:
@@ -128,27 +128,27 @@ fail_exist:
 	return ret;
 }
 
-void j1939_segment_unregister(struct j1939_segment *jseg)
+void j1939_priv_unregister(struct j1939_priv *priv)
 {
 	struct j1939_ecu *ecu;
 
-	if (!jseg)
+	if (!priv)
 		return;
 
 	spin_lock_bh(&segments.lock);
-	list_del_init(&jseg->flist);
+	list_del_init(&priv->flist);
 	spin_unlock_bh(&segments.lock);
 
-	write_lock_bh(&jseg->lock);
-	while (!list_empty(&jseg->ecus)) {
-		ecu = list_first_entry(&jseg->ecus, struct j1939_ecu, list);
-		write_unlock_bh(&jseg->lock);
+	write_lock_bh(&priv->lock);
+	while (!list_empty(&priv->ecus)) {
+		ecu = list_first_entry(&priv->ecus, struct j1939_ecu, list);
+		write_unlock_bh(&priv->lock);
 		j1939_ecu_unregister(ecu);
-		write_lock_bh(&jseg->lock);
+		write_lock_bh(&priv->lock);
 	}
-	write_unlock_bh(&jseg->lock);
-	jseg_dbg(jseg, "unregister\n");
-	put_j1939_segment(jseg);
+	write_unlock_bh(&priv->lock);
+	priv_dbg(priv, "unregister\n");
+	put_j1939_priv(priv);
 }
 
 /*
@@ -178,7 +178,7 @@ void put_j1939_ecu(struct j1939_ecu *ecu)
 struct j1939_ecu *j1939_ecu_get_register(name_t name, int ifindex, int flags,
 		int return_existing)
 {
-	struct j1939_segment *parent;
+	struct j1939_priv *parent;
 	struct j1939_ecu *ecu, *dut;
 
 	if (!ifindex || !name) {
@@ -187,7 +187,7 @@ struct j1939_ecu *j1939_ecu_get_register(name_t name, int ifindex, int flags,
 		return ERR_PTR(-EINVAL);
 	}
 
-	parent = j1939_segment_find(ifindex);
+	parent = j1939_priv_find(ifindex);
 	if (!parent) {
 		pr_alert("%s %i: segment not found\n", __func__, ifindex);
 		return ERR_PTR(-EINVAL);
@@ -236,7 +236,7 @@ struct j1939_ecu *j1939_ecu_get_register(name_t name, int ifindex, int flags,
 duplicate:
 	get_j1939_ecu(dut);
 	write_unlock_bh(&parent->lock);
-	put_j1939_segment(parent);
+	put_j1939_priv(parent);
 	if (return_existing)
 		return dut;
 	ecu_alert(ecu, "duplicate name\n");
@@ -255,18 +255,18 @@ void j1939_ecu_unregister(struct j1939_ecu *ecu)
 	list_del_init(&ecu->list);
 	write_unlock_bh(&ecu->parent->lock);
 	/* put segment, reverting the effect done by ..._register() */
-	put_j1939_segment(ecu->parent);
+	put_j1939_priv(ecu->parent);
 	put_j1939_ecu(ecu);
 }
 
 struct j1939_ecu *j1939_ecu_find_by_addr(int sa, int ifindex)
 {
 	struct j1939_ecu *ecu;
-	struct j1939_segment *parent;
+	struct j1939_priv *parent;
 
 	if (!j1939_address_is_unicast(sa))
 		return NULL;
-	parent = j1939_segment_find(ifindex);
+	parent = j1939_priv_find(ifindex);
 	if (!parent)
 		return NULL;
 	read_lock_bh(&parent->lock);
@@ -274,19 +274,19 @@ struct j1939_ecu *j1939_ecu_find_by_addr(int sa, int ifindex)
 	if (ecu)
 		get_j1939_ecu(ecu);
 	read_unlock_bh(&parent->lock);
-	put_j1939_segment(parent);
+	put_j1939_priv(parent);
 	return ecu;
 }
 
 int j1939_name_to_sa(uint64_t name, int ifindex)
 {
 	struct j1939_ecu *ecu;
-	struct j1939_segment *parent;
+	struct j1939_priv *parent;
 	int sa;
 
 	if (!name)
 		return J1939_IDLE_ADDR;
-	parent = j1939_segment_find(ifindex);
+	parent = j1939_priv_find(ifindex);
 	if (!parent)
 		return J1939_IDLE_ADDR;
 
@@ -302,21 +302,21 @@ int j1939_name_to_sa(uint64_t name, int ifindex)
 		}
 	}
 	read_unlock_bh(&parent->lock);
-	put_j1939_segment(parent);
+	put_j1939_priv(parent);
 	return sa;
 }
 
-struct j1939_ecu *j1939_ecu_find_segment_default_tx(int ifindex,
+struct j1939_ecu *j1939_ecu_find_priv_default_tx(int ifindex,
 		name_t *name, uint8_t *addr)
 {
 	struct j1939_ecu *ecu;
-	struct j1939_segment *parent;
+	struct j1939_priv *parent;
 	struct addr_ent *paddr;
 	int j;
 
 	if (ifindex <= 0)
 		return ERR_PTR(-EINVAL);
-	parent = j1939_segment_find(ifindex);
+	parent = j1939_priv_find(ifindex);
 	if (!parent)
 		return ERR_PTR(-ENETUNREACH);
 	read_lock_bh(&parent->lock);
@@ -345,18 +345,18 @@ struct j1939_ecu *j1939_ecu_find_segment_default_tx(int ifindex,
 	ecu = ERR_PTR(-EHOSTDOWN);
 found:
 	read_unlock_bh(&parent->lock);
-	put_j1939_segment(parent);
+	put_j1939_priv(parent);
 	return ecu;
 }
 
 /* ecu lookup helper */
 static struct j1939_ecu *_j1939_ecu_find_by_name(name_t name,
-		struct j1939_segment *jseg)
+		struct j1939_priv *priv)
 {
 	struct j1939_ecu *ecu;
 
-	read_lock_bh(&jseg->lock);
-	list_for_each_entry(ecu, &jseg->ecus, list) {
+	read_lock_bh(&priv->lock);
+	list_for_each_entry(ecu, &priv->ecus, list) {
 		if (ecu->name == name) {
 			get_j1939_ecu(ecu);
 			goto found_on_intf;
@@ -364,7 +364,7 @@ static struct j1939_ecu *_j1939_ecu_find_by_name(name_t name,
 	}
 	ecu = NULL;
 found_on_intf:
-	read_unlock_bh(&jseg->lock);
+	read_unlock_bh(&priv->lock);
 	return ecu;
 }
 
@@ -372,24 +372,24 @@ found_on_intf:
 struct j1939_ecu *j1939_ecu_find_by_name(name_t name, int ifindex)
 {
 	struct j1939_ecu *ecu;
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 
 	if (!name)
 		return NULL;
 	if (ifindex) {
-		jseg = j1939_segment_find(ifindex);
-		if (!jseg)
+		priv = j1939_priv_find(ifindex);
+		if (!priv)
 			return NULL;
-		ecu = _j1939_ecu_find_by_name(name, jseg);
-		put_j1939_segment(jseg);
+		ecu = _j1939_ecu_find_by_name(name, priv);
+		put_j1939_priv(priv);
 		return ecu;
 	}
 	/* iterate segments */
 	spin_lock_bh(&segments.lock);
-	list_for_each_entry(jseg, &segments.list, flist) {
-		get_j1939_segment(jseg);
-		ecu = _j1939_ecu_find_by_name(name, jseg);
-		put_j1939_segment(jseg);
+	list_for_each_entry(priv, &segments.list, flist) {
+		get_j1939_priv(priv);
+		ecu = _j1939_ecu_find_by_name(name, priv);
+		put_j1939_priv(priv);
 		if (ecu)
 			goto found;
 	}
@@ -402,7 +402,7 @@ found:
 /* PROC */
 static int j1939_proc_addr(struct seq_file *sqf, void *v)
 {
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 	struct net_device *netdev;
 	struct addr_ent *paddr;
 	int j, flags;
@@ -412,17 +412,17 @@ static int j1939_proc_addr(struct seq_file *sqf, void *v)
 	now = ktime_get();
 	seq_printf(sqf, "iface\tSA\tflags\trxtime\n");
 	spin_lock_bh(&segments.lock);
-	list_for_each_entry(jseg, &segments.list, flist) {
-		get_j1939_segment(jseg);
-		netdev = dev_get_by_index(&init_net, jseg->ifindex);
+	list_for_each_entry(priv, &segments.list, flist) {
+		get_j1939_priv(priv);
+		netdev = dev_get_by_index(&init_net, priv->ifindex);
 		if (!netdev) {
 			pr_alert("j1939 proc: ifindex %i not found\n",
-				jseg->ifindex);
-			put_j1939_segment(jseg);
+				priv->ifindex);
+			put_j1939_priv(priv);
 			continue;
 		}
-		read_lock_bh(&jseg->lock);
-		for (j = 0, paddr = jseg->ents; j < J1939_IDLE_ADDR;
+		read_lock_bh(&priv->lock);
+		for (j = 0, paddr = priv->ents; j < J1939_IDLE_ADDR;
 				++j, ++paddr) {
 			flags = paddr->flags;
 			if (paddr->ecu)
@@ -438,9 +438,9 @@ static int j1939_proc_addr(struct seq_file *sqf, void *v)
 				paddr->ecu ? 'E' : '-',
 				tv.tv_sec, tv.tv_usec);
 		}
-		read_unlock_bh(&jseg->lock);
+		read_unlock_bh(&priv->lock);
 		dev_put(netdev);
-		put_j1939_segment(jseg);
+		put_j1939_priv(priv);
 	}
 	spin_unlock_bh(&segments.lock);
 	return 0;
@@ -448,7 +448,7 @@ static int j1939_proc_addr(struct seq_file *sqf, void *v)
 
 static int j1939_proc_ecu(struct seq_file *sqf, void *v)
 {
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 	struct j1939_ecu *ecu;
 	struct net_device *netdev;
 	ktime_t now;
@@ -458,17 +458,17 @@ static int j1939_proc_ecu(struct seq_file *sqf, void *v)
 	now = ktime_get();
 	seq_printf(sqf, "iface\taddr\tname\tflags\trxtime\n");
 	spin_lock_bh(&segments.lock);
-	list_for_each_entry(jseg, &segments.list, flist) {
-		get_j1939_segment(jseg);
-		netdev = dev_get_by_index(&init_net, jseg->ifindex);
+	list_for_each_entry(priv, &segments.list, flist) {
+		get_j1939_priv(priv);
+		netdev = dev_get_by_index(&init_net, priv->ifindex);
 		if (!netdev) {
 			pr_alert("j1939 proc: ifindex %i not found\n",
-				jseg->ifindex);
-			put_j1939_segment(jseg);
+				priv->ifindex);
+			put_j1939_priv(priv);
 			continue;
 		}
-		read_lock_bh(&jseg->lock);
-		list_for_each_entry(ecu, &jseg->ecus, list) {
+		read_lock_bh(&priv->lock);
+		list_for_each_entry(ecu, &priv->ecus, list) {
 			tv = ktime_to_timeval(ktime_sub(now, ecu->rxtime));
 			if (j1939_address_is_unicast(ecu->sa) &&
 				(ecu->parent->ents[ecu->sa].ecu == ecu))
@@ -481,9 +481,9 @@ static int j1939_proc_ecu(struct seq_file *sqf, void *v)
 				(ecu->flags & ECUFLAG_LOCAL) ? 'L' : 'R',
 				tv.tv_sec, tv.tv_usec);
 		}
-		read_unlock_bh(&jseg->lock);
+		read_unlock_bh(&priv->lock);
 		dev_put(netdev);
-		put_j1939_segment(jseg);
+		put_j1939_priv(priv);
 	}
 	spin_unlock_bh(&segments.lock);
 	return 0;
@@ -501,16 +501,16 @@ int __init j1939bus_module_init(void)
 
 void j1939bus_module_exit(void)
 {
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 	struct net_device *netdev;
 
 	spin_lock_bh(&segments.lock);
 	while (!list_empty(&segments.list)) {
-		jseg = list_first_entry(&segments.list,
-				struct j1939_segment, flist);
-		netdev = dev_get_by_index(&init_net, jseg->ifindex);
+		priv = list_first_entry(&segments.list,
+				struct j1939_priv, flist);
+		netdev = dev_get_by_index(&init_net, priv->ifindex);
 		spin_unlock_bh(&segments.lock);
-		j1939_segment_detach(netdev);
+		j1939_priv_detach(netdev);
 		dev_put(netdev);
 		spin_lock_bh(&segments.lock);
 	}

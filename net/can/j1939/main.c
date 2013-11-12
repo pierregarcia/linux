@@ -44,15 +44,15 @@ static struct {
 
 static void j1939_recv_ecu_flags(struct sk_buff *skb, void *data)
 {
-	struct j1939_segment *jseg = data;
+	struct j1939_priv *priv = data;
 	struct j1939_sk_buff_cb *cb = (void *)skb->cb;
 	struct addr_ent *paddr;
 
-	if (!jseg)
+	if (!priv)
 		return;
-	write_lock_bh(&jseg->lock);
+	write_lock_bh(&priv->lock);
 	if (j1939_address_is_unicast(cb->src.addr)) {
-		paddr = &jseg->ents[cb->src.addr];
+		paddr = &priv->ents[cb->src.addr];
 		paddr->rxtime = ktime_get();
 		if (0x0ee00 == cb->pgn) {
 			/* do not touch many things for Address claims */
@@ -67,13 +67,13 @@ static void j1939_recv_ecu_flags(struct sk_buff *skb, void *data)
 	}
 
 	if (j1939_address_is_unicast(cb->dst.addr)) {
-		paddr = &jseg->ents[cb->dst.addr];
+		paddr = &priv->ents[cb->dst.addr];
 		if (paddr->ecu)
 			cb->dst.flags = paddr->ecu->flags;
 		else
 			cb->dst.flags = paddr->flags ?: ECUFLAG_REMOTE;
 	}
-	write_unlock_bh(&jseg->lock);
+	write_unlock_bh(&priv->lock);
 }
 
 /* lowest layer */
@@ -187,7 +187,7 @@ failed:
 static int j1939_send_normalize(struct sk_buff *skb)
 {
 	struct j1939_sk_buff_cb *cb = (void *)skb->cb;
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 	struct addr_ent *paddr;
 	struct j1939_ecu *ecu;
 	int ret = 0;
@@ -200,10 +200,10 @@ static int j1939_send_normalize(struct sk_buff *skb)
 	/* verify source */
 	if (!cb->ifindex)
 		return -ENETUNREACH;
-	jseg = j1939_segment_find(cb->ifindex);
-	if (!jseg)
+	priv = j1939_priv_find(cb->ifindex);
+	if (!priv)
 		return -ENETUNREACH;
-	read_lock_bh(&jseg->lock);
+	read_lock_bh(&priv->lock);
 	/* verify source */
 	if (cb->src.name) {
 		ecu = j1939_ecu_find_by_name(cb->src.name, cb->ifindex);
@@ -211,7 +211,7 @@ static int j1939_send_normalize(struct sk_buff *skb)
 		if (ecu)
 			put_j1939_ecu(ecu);
 	} else if (j1939_address_is_unicast(cb->src.addr)) {
-		paddr = &jseg->ents[cb->src.addr];
+		paddr = &priv->ents[cb->src.addr];
 		cb->src.flags = paddr->flags;
 	} else if (cb->src.addr == J1939_IDLE_ADDR) {
 		/* allow always */
@@ -242,7 +242,7 @@ static int j1939_send_normalize(struct sk_buff *skb)
 		ret = -EADDRNOTAVAIL;
 		goto failed;
 	} else if (j1939_address_is_unicast(cb->dst.addr)) {
-		paddr = &jseg->ents[cb->dst.addr];
+		paddr = &priv->ents[cb->dst.addr];
 		cb->dst.flags = paddr->flags;
 	} else {
 		cb->dst.flags = 0;
@@ -250,8 +250,8 @@ static int j1939_send_normalize(struct sk_buff *skb)
 
 	ret = 0;
 failed:
-	read_unlock_bh(&jseg->lock);
-	put_j1939_segment(jseg);
+	read_unlock_bh(&priv->lock);
+	put_j1939_priv(priv);
 	return ret;
 }
 
@@ -332,45 +332,45 @@ EXPORT_SYMBOL_GPL(j1939_send);
 
 #define J1939_CAN_ID	CAN_EFF_FLAG
 #define J1939_CAN_MASK	(CAN_EFF_FLAG | CAN_RTR_FLAG)
-int j1939_segment_attach(struct net_device *netdev)
+int j1939_priv_attach(struct net_device *netdev)
 {
 	int ret;
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 
 	if (!netdev)
 		return -ENODEV;
 	if (netdev->type != ARPHRD_CAN)
 		return -EAFNOSUPPORT;
 
-	ret = j1939_segment_register(netdev);
+	ret = j1939_priv_register(netdev);
 	if (ret < 0)
 		goto fail_register;
-	jseg = j1939_segment_find(netdev->ifindex);
+	priv = j1939_priv_find(netdev->ifindex);
 	ret = can_rx_register(netdev, J1939_CAN_ID, J1939_CAN_MASK,
-			j1939_can_recv, jseg, "j1939");
+			j1939_can_recv, priv, "j1939");
 	if (ret < 0)
 		goto fail_can_rx;
 	return 0;
 
 fail_can_rx:
-	j1939_segment_unregister(jseg);
-	put_j1939_segment(jseg);
+	j1939_priv_unregister(priv);
+	put_j1939_priv(priv);
 fail_register:
 	return ret;
 }
 
-int j1939_segment_detach(struct net_device *netdev)
+int j1939_priv_detach(struct net_device *netdev)
 {
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 
 	BUG_ON(!netdev);
-	jseg = j1939_segment_find(netdev->ifindex);
-	if (!jseg)
+	priv = j1939_priv_find(netdev->ifindex);
+	if (!priv)
 		return -EHOSTDOWN;
 	can_rx_unregister(netdev, J1939_CAN_ID, J1939_CAN_MASK,
-			j1939_can_recv, jseg);
-	j1939_segment_unregister(jseg);
-	put_j1939_segment(jseg);
+			j1939_can_recv, priv);
+	j1939_priv_unregister(priv);
+	put_j1939_priv(priv);
 	j1939sk_netdev_event(netdev->ifindex, EHOSTDOWN);
 	return 0;
 }
@@ -379,7 +379,7 @@ static int j1939_notifier(struct notifier_block *nb,
 			unsigned long msg, void *data)
 {
 	struct net_device *netdev = (struct net_device *)data;
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 
 	if (!net_eq(dev_net(netdev), &init_net))
 		return NOTIFY_DONE;
@@ -389,10 +389,10 @@ static int j1939_notifier(struct notifier_block *nb,
 
 	switch (msg) {
 	case NETDEV_UNREGISTER:
-		jseg = j1939_segment_find(netdev->ifindex);
-		if (!jseg)
+		priv = j1939_priv_find(netdev->ifindex);
+		if (!priv)
 			break;
-		j1939_segment_unregister(jseg);
+		j1939_priv_unregister(priv);
 		j1939sk_netdev_event(netdev->ifindex, ENODEV);
 		break;
 

@@ -52,11 +52,11 @@ struct j1939_ecu {
 	atomic_t ac_delay_expired;
 	struct hrtimer ac_timer;
 	struct kref kref;
-	struct j1939_segment *parent;
+	struct j1939_priv *parent;
 };
 #define to_j1939_ecu(x) container_of((x), struct j1939_ecu, dev)
 
-struct j1939_segment {
+struct j1939_priv {
 	struct list_head ecus; /*
 	 * local list entry in parent
 	 * These allow irq (& softirq) context lookups on j1939 devices
@@ -95,15 +95,15 @@ struct j1939_segment {
 	 */
 	struct kref kref;
 };
-#define to_j1939_segment(x) container_of((x), struct j1939_segment, dev)
+#define to_j1939_priv(x) container_of((x), struct j1939_priv, dev)
 
 extern void put_j1939_ecu(struct j1939_ecu *ecu);
-extern void put_j1939_segment(struct j1939_segment *segment);
+extern void put_j1939_priv(struct j1939_priv *segment);
 static inline void get_j1939_ecu(struct j1939_ecu *dut)
 {
 	kref_get(&dut->kref);
 }
-static inline void get_j1939_segment(struct j1939_segment *dut)
+static inline void get_j1939_priv(struct j1939_priv *dut)
 {
 	kref_get(&dut->kref);
 }
@@ -169,7 +169,7 @@ extern int j1939_name_to_sa(uint64_t name, int ifindex);
 extern struct j1939_ecu *j1939_ecu_find_by_addr(int sa, int ifindex);
 extern struct j1939_ecu *j1939_ecu_find_by_name(name_t name, int ifindex);
 /* find_by_name, with kref & read_lock taken */
-extern struct j1939_ecu *j1939_ecu_find_segment_default_tx(
+extern struct j1939_ecu *j1939_ecu_find_priv_default_tx(
 		int ifindex, name_t *pname, uint8_t *paddr);
 
 extern void j1939_put_promisc_receiver(int ifindex);
@@ -256,12 +256,12 @@ extern struct j1939_ecu *j1939_ecu_get_register(name_t name, int ifindex,
 		int flags, int return_existing);
 extern void j1939_ecu_unregister(struct j1939_ecu *);
 
-extern int j1939_segment_attach(struct net_device *);
-extern int j1939_segment_detach(struct net_device *);
+extern int j1939_priv_attach(struct net_device *);
+extern int j1939_priv_detach(struct net_device *);
 
-extern int j1939_segment_register(struct net_device *);
-extern void j1939_segment_unregister(struct j1939_segment *);
-extern struct j1939_segment *j1939_segment_find(int ifindex);
+extern int j1939_priv_register(struct net_device *);
+extern void j1939_priv_unregister(struct j1939_priv *);
+extern struct j1939_priv *j1939_priv_find(int ifindex);
 
 extern void j1939sk_netdev_event(int ifindex, int error_code);
 
