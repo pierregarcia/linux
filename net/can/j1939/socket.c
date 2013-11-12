@@ -213,7 +213,7 @@ static int j1939sk_bind_netdev_helper(struct socket *sock)
 	struct j1939_sock *jsk = j1939_sk(sock->sk);
 	int ret;
 	struct net_device *netdev;
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 
 	if (!jsk->sk.sk_bound_dev_if)
 		return 0;
@@ -226,20 +226,20 @@ static int j1939sk_bind_netdev_helper(struct socket *sock)
 	}
 
 	/* no need to test for CAN device,
-	 * implicitely done by j1939_segment
+	 * implicitely done by j1939_priv
 	 */
-	jseg = j1939_segment_find(netdev->ifindex);
-	if (!jseg) {
+	priv = j1939_priv_find(netdev->ifindex);
+	if (!priv) {
 		ret = -EHOSTDOWN;
-		goto fail_segment;
+		goto fail_priv;
 	}
 
 	if (!(netdev->flags & IFF_UP)) {
 		sock->sk->sk_err = ENETDOWN;
 		sock->sk->sk_error_report(sock->sk);
 	}
-	put_j1939_segment(jseg);
-fail_segment:
+	put_j1939_priv(priv);
+fail_priv:
 	dev_put(netdev);
 fail_netdev:
 	return ret;
@@ -247,7 +247,7 @@ fail_netdev:
 
 static int j1939sk_bind_addr_helper(int ifindex, uint8_t addr)
 {
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 	struct addr_ent *paddr;
 	int flags;
 
@@ -255,14 +255,14 @@ static int j1939sk_bind_addr_helper(int ifindex, uint8_t addr)
 	if (!ifindex)
 		return -EINVAL;
 
-	jseg = j1939_segment_find(ifindex);
-	if (!jseg)
+	priv = j1939_priv_find(ifindex);
+	if (!priv)
 		return -ENETUNREACH;
-	paddr = &jseg->ents[addr];
-	read_lock_bh(&jseg->lock);
+	paddr = &priv->ents[addr];
+	read_lock_bh(&priv->lock);
 	flags = paddr->flags;
-	read_unlock_bh(&jseg->lock);
-	put_j1939_segment(jseg);
+	read_unlock_bh(&priv->lock);
+	put_j1939_priv(priv);
 	if (!(flags & ECUFLAG_LOCAL))
 		return -EADDRNOTAVAIL;
 	return 0;
@@ -443,7 +443,7 @@ static int j1939sk_connect(struct socket *sock, struct sockaddr *uaddr,
 	 * will stick to the same source ECU
 	 */
 	if (!jsk->addr.src && !j1939_address_is_valid(jsk->addr.sa)) {
-		ecu = j1939_ecu_find_segment_default_tx(ifindex,
+		ecu = j1939_ecu_find_priv_default_tx(ifindex,
 				&jsk->addr.src, &jsk->addr.sa);
 		if (IS_ERR(ecu)) {
 			ret = PTR_ERR(ecu);
@@ -774,7 +774,7 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 		return -EDESTADDRREQ;
 	if (j1939_no_address(&jsk->sk)) {
 		lock_sock(&jsk->sk);
-		ecu = j1939_ecu_find_segment_default_tx(
+		ecu = j1939_ecu_find_priv_default_tx(
 				jsk->sk.sk_bound_dev_if,
 				&jsk->addr.src, &jsk->addr.sa);
 		release_sock(&jsk->sk);

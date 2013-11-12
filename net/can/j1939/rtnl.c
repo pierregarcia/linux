@@ -30,7 +30,7 @@ int j1939rtnl_del_addr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
 {
 	int ret;
 	struct ifaddrmsg *ifm;
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 	uint8_t jaddr = J1939_NO_ADDR;
 	uint64_t jname = J1939_NO_NAME;
 
@@ -50,23 +50,23 @@ int j1939rtnl_del_addr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
 		jname = be64_to_cpu(nla_get_u64(tb[IFA_J1939_NAME]));
 
 	ifm = nlmsg_data(nlh);
-	jseg = j1939_segment_find(ifm->ifa_index);
-	if (!jseg)
+	priv = j1939_priv_find(ifm->ifa_index);
+	if (!priv)
 		return -EHOSTDOWN;
 
 	ret = 0;
 	if (j1939_address_is_unicast(jaddr)) {
 		struct addr_ent *ent;
 
-		ent = &jseg->ents[jaddr];
-		write_lock_bh(&jseg->lock);
+		ent = &priv->ents[jaddr];
+		write_lock_bh(&priv->lock);
 		if (!ent->flags)
 			ret = -EADDRNOTAVAIL;
 		else if (!(ent->flags & ECUFLAG_LOCAL))
 			ret = -EREMOTE;
 		else
 			ent->flags = 0;
-		write_unlock_bh(&jseg->lock);
+		write_unlock_bh(&priv->lock);
 	} else if (jname) {
 		struct j1939_ecu *ecu;
 
@@ -82,14 +82,14 @@ int j1939rtnl_del_addr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
 			ret = -ENODEV;
 		}
 	}
-	put_j1939_segment(jseg);
+	put_j1939_priv(priv);
 	return ret;
 }
 
 int j1939rtnl_new_addr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
 {
 	struct ifaddrmsg *ifm;
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 	uint8_t jaddr = J1939_NO_ADDR;
 	uint64_t jname = J1939_NO_NAME;
 	struct addr_ent *ent;
@@ -104,8 +104,8 @@ int j1939rtnl_new_addr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
 		return -EINVAL;
 
 	ifm = nlmsg_data(nlh);
-	jseg = j1939_segment_find(ifm->ifa_index);
-	if (!jseg)
+	priv = j1939_priv_find(ifm->ifa_index);
+	if (!priv)
 		return -EHOSTDOWN;
 
 	nla_parse_nested(tb, IFA_J1939_MAX-1, nla, j1939_ifa_policy);
@@ -116,14 +116,14 @@ int j1939rtnl_new_addr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
 
 	ret = 0;
 	if (j1939_address_is_unicast(jaddr)) {
-		ent = &jseg->ents[jaddr];
-		write_lock_bh(&jseg->lock);
+		ent = &priv->ents[jaddr];
+		write_lock_bh(&priv->lock);
 		if ((ent->ecu && (ent->ecu->flags & ECUFLAG_REMOTE)) ||
 				(ent->flags & ECUFLAG_REMOTE))
 			ret = -EREMOTE;
 		else
 			ent->flags |= ECUFLAG_LOCAL;
-		write_unlock_bh(&jseg->lock);
+		write_unlock_bh(&priv->lock);
 	} else if (jname) {
 		struct j1939_ecu *ecu;
 
@@ -134,7 +134,7 @@ int j1939rtnl_new_addr(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
 		else
 			put_j1939_ecu(ecu);
 	}
-	put_j1939_segment(jseg);
+	put_j1939_priv(priv);
 	return ret;
 }
 
@@ -176,7 +176,7 @@ int j1939rtnl_dump_addr(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	int ndev, addr, ret, sa;
 	struct net_device *netdev;
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 	struct j1939_ecu *ecu;
 	struct addr_ent *ent;
 
@@ -191,13 +191,13 @@ int j1939rtnl_dump_addr(struct sk_buff *skb, struct netlink_callback *cb)
 		if (netdev->type != ARPHRD_CAN)
 			continue;
 
-		jseg = j1939_segment_find(netdev->ifindex);
-		if (!jseg)
+		priv = j1939_priv_find(netdev->ifindex);
+		if (!priv)
 			continue;
 
-		read_lock_bh(&jseg->lock);
+		read_lock_bh(&priv->lock);
 		for (addr = cb->args[2]; addr < J1939_IDLE_ADDR; ++addr) {
-			ent = &jseg->ents[addr];
+			ent = &priv->ents[addr];
 			if (!(ent->flags & ECUFLAG_LOCAL))
 				continue;
 			ret = j1939rtnl_fill_ifaddr(skb, netdev->ifindex, addr,
@@ -205,7 +205,7 @@ int j1939rtnl_dump_addr(struct sk_buff *skb, struct netlink_callback *cb)
 					cb->nlh->nlmsg_seq, RTM_NEWADDR,
 					NLM_F_MULTI);
 			if (ret < 0) {
-				read_unlock_bh(&jseg->lock);
+				read_unlock_bh(&priv->lock);
 				goto done;
 			}
 			cb->args[2] = addr + 1;
@@ -213,7 +213,7 @@ int j1939rtnl_dump_addr(struct sk_buff *skb, struct netlink_callback *cb)
 
 		if (addr > J1939_IDLE_ADDR)
 			addr = J1939_IDLE_ADDR;
-		list_for_each_entry(ecu, &jseg->ecus, list) {
+		list_for_each_entry(ecu, &priv->ecus, list) {
 			if (addr++ < cb->args[2])
 				continue;
 			if (!(ecu->flags & ECUFLAG_LOCAL))
@@ -227,12 +227,12 @@ int j1939rtnl_dump_addr(struct sk_buff *skb, struct netlink_callback *cb)
 					cb->nlh->nlmsg_seq, RTM_NEWADDR,
 					NLM_F_MULTI);
 			if (ret < 0) {
-				read_unlock_bh(&jseg->lock);
+				read_unlock_bh(&priv->lock);
 				goto done;
 			}
 			cb->args[2] = addr;
 		}
-		read_unlock_bh(&jseg->lock);
+		read_unlock_bh(&priv->lock);
 		/* reset first address for device */
 		cb->args[2] = 0;
 	}
@@ -264,14 +264,14 @@ static int j1939_validate_link_af(const struct net_device *dev,
 
 static int j1939_fill_link_af(struct sk_buff *skb, const struct net_device *dev)
 {
-	struct j1939_segment *jseg;
+	struct j1939_priv *priv;
 
 	if (!dev)
 		return -ENODEV;
-	jseg = j1939_segment_find(dev->ifindex);
-	if (jseg)
-		put_j1939_segment(jseg);
-	if (nla_put_u8(skb, IFLA_J1939_ENABLE, jseg ? 1 : 0) < 0)
+	priv = j1939_priv_find(dev->ifindex);
+	if (priv)
+		put_j1939_priv(priv);
+	if (nla_put_u8(skb, IFLA_J1939_ENABLE, priv ? 1 : 0) < 0)
 		return -EMSGSIZE;
 	return 0;
 }
@@ -287,9 +287,9 @@ static int j1939_set_link_af(struct net_device *dev, const struct nlattr *nla)
 
 	if (tb[IFLA_J1939_ENABLE]) {
 		if (nla_get_u8(tb[IFLA_J1939_ENABLE]))
-			ret = j1939_segment_attach(dev);
+			ret = j1939_priv_attach(dev);
 		else
-			ret = j1939_segment_detach(dev);
+			ret = j1939_priv_detach(dev);
 		if (ret < 0)
 			return ret;
 	}
