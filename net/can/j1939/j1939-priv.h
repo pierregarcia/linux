@@ -15,7 +15,6 @@
 #include <linux/list.h>
 #include <net/sock.h>
 
-#include <linux/seq_file.h>
 #include <linux/proc_fs.h>
 #include <linux/module.h>
 #include <linux/can/j1939.h>
@@ -175,12 +174,9 @@ extern struct j1939_ecu *j1939_ecu_find_priv_default_tx(
 extern void j1939_put_promisc_receiver(int ifindex);
 extern void j1939_get_promisc_receiver(int ifindex);
 
-extern int j1939_proc_add(const char *file,
-		int (*seq_show)(struct seq_file *sqf, void *v),
-		write_proc_t write);
-extern void j1939_proc_remove(const char *file);
-
+extern struct proc_dir_entry *j1939_procdir;
 extern const char j1939_procname[];
+
 /* j1939 printk */
 #define j1939_printk(level, ...) printk(level "J1939 " __VA_ARGS__)
 
@@ -294,12 +290,10 @@ extern void j1939_recv_resume(void);
 extern void j1939_sock_pending_del(struct sock *sk);
 
 /* seperate module-init/modules-exit's */
-extern __init int j1939_proc_module_init(void);
 extern __init int j1939bus_module_init(void);
 extern __init int j1939sk_module_init(void);
 extern __init int j1939tp_module_init(void);
 
-extern void j1939_proc_module_exit(void);
 extern void j1939bus_module_exit(void);
 extern void j1939sk_module_exit(void);
 extern void j1939tp_module_exit(void);

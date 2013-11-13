@@ -14,6 +14,7 @@
 #include <linux/version.h>
 #include <linux/if_arp.h>
 #include <linux/wait.h>
+#include <linux/seq_file.h>
 #include "j1939-priv.h"
 
 #define REGULAR		0
@@ -1406,6 +1407,20 @@ static int j1939tp_proc_show(struct seq_file *sqf, void *v)
 	return 0;
 }
 
+static int j1939tp_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, j1939tp_proc_show, PDE(inode));
+}
+
+static const struct file_operations j1939tp_proc_ops = {
+	.owner		= THIS_MODULE,
+	.open		= j1939tp_proc_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
+/* module init */
 int __init j1939tp_module_init(void)
 {
 	spin_lock_init(&s.lock);
@@ -1415,10 +1430,12 @@ int __init j1939tp_module_init(void)
 	INIT_LIST_HEAD(&s.del.sessionq);
 	INIT_WORK(&s.del.work, j1939tp_del_work);
 
+	if (!proc_create("transport", 0400, j1939_procdir, &j1939tp_proc_ops))
+		return -ENOMEM;
+
 	s.notifier.notifier_call = j1939tp_notifier;
 	register_netdevice_notifier(&s.notifier);
 
-	j1939_proc_add("transport", j1939tp_proc_show, NULL);
 	j1939tp_table_header =
 		register_sysctl_paths(j1939tp_path, j1939tp_table);
 	init_waitqueue_head(&s.wait);
@@ -1433,7 +1450,7 @@ void j1939tp_module_exit(void)
 
 	unregister_sysctl_table(j1939tp_table_header);
 	unregister_netdevice_notifier(&s.notifier);
-	j1939_proc_remove("transport");
+	remove_proc_entry("transport", j1939_procdir);
 	sessionlist_lock();
 	list_for_each_entry_safe(session, saved, &s.extsessionq, list) {
 		list_del_init(&session->list);
