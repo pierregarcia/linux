@@ -42,6 +42,11 @@ struct j1939_sock {
 	struct j1939_filter *filters;
 	int nfilters;
 
+	/*
+	 * j1939 may emit equal PGN (!= equal CAN-id's) out of order
+	 * when transport protocol comes in.
+	 * To allow emitting in order, keep a 'pending' nr. of packets
+	 */
 	int skb_pending;
 	spinlock_t lock;
 	wait_queue_head_t waitq;
