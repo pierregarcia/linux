@@ -22,9 +22,6 @@
 
 #include "j1939-priv.h"
 
-#define priv_dbg(priv, fmt, ...) \
-	pr_debug("j1939-%i: " fmt, (priv)->ifindex, ##__VA_ARGS__)
-
 #define ecu_dbg(ecu, fmt, ...) \
 	pr_debug("j1939-%i,%016llx,%02x: " fmt, (ecu)->parent->ifindex, \
 		(ecu)->name, (ecu)->sa, ##__VA_ARGS__)
@@ -32,33 +29,11 @@
 	pr_alert("j1939-%i,%016llx,%02x: " fmt, (ecu)->parent->ifindex, \
 		(ecu)->name, (ecu)->sa, ##__VA_ARGS__)
 
-static struct {
-	struct list_head list;
-	spinlock_t lock;
-} segments;
-
-struct j1939_priv *j1939_priv_find(int ifindex)
-{
-	struct j1939_priv *priv;
-
-	spin_lock_bh(&segments.lock);
-	list_for_each_entry(priv, &segments.list, flist) {
-		if (priv->ifindex == ifindex) {
-			get_j1939_priv(priv);
-			goto found;
-		}
-	}
-	priv = NULL;
-found:
-	spin_unlock_bh(&segments.lock);
-	return priv;
-}
-
 /*
  * iterate over ECU's,
  * and register flagged ecu's on their claimed SA
  */
-static void j1939_priv_ac_task(unsigned long val)
+void j1939_priv_ac_task(unsigned long val)
 {
 	struct j1939_priv *priv = (void *)val;
 	struct j1939_ecu *ecu;
@@ -75,7 +50,7 @@ static void j1939_priv_ac_task(unsigned long val)
 	write_unlock_bh(&priv->lock);
 }
 /*
- * segment device interface
+ * device interface
  */
 static void cb_put_j1939_priv(struct kref *kref)
 {
@@ -89,66 +64,6 @@ static void cb_put_j1939_priv(struct kref *kref)
 void put_j1939_priv(struct j1939_priv *segment)
 {
 	kref_put(&segment->kref, cb_put_j1939_priv);
-}
-
-int j1939_priv_register(struct net_device *netdev)
-{
-	int ret;
-	struct j1939_priv *priv;
-
-	priv = j1939_priv_find(netdev->ifindex);
-	if (priv) {
-		put_j1939_priv(priv);
-		ret = -EALREADY;
-		goto fail_exist;
-	}
-	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
-	if (!priv) {
-		ret = -ENOMEM;
-		goto fail_malloc;
-	}
-	tasklet_init(&priv->ac_task, j1939_priv_ac_task,
-			(unsigned long)priv);
-	rwlock_init(&priv->lock);
-	INIT_LIST_HEAD(&priv->ecus);
-	INIT_LIST_HEAD(&priv->flist);
-	priv->ifindex = netdev->ifindex;
-
-	kref_init(&priv->kref);
-
-	spin_lock_bh(&segments.lock);
-	list_add_tail(&priv->flist, &segments.list);
-	spin_unlock_bh(&segments.lock);
-
-	priv_dbg(priv, "register\n");
-	return 0;
-
-fail_malloc:
-fail_exist:
-	return ret;
-}
-
-void j1939_priv_unregister(struct j1939_priv *priv)
-{
-	struct j1939_ecu *ecu;
-
-	if (!priv)
-		return;
-
-	spin_lock_bh(&segments.lock);
-	list_del_init(&priv->flist);
-	spin_unlock_bh(&segments.lock);
-
-	write_lock_bh(&priv->lock);
-	while (!list_empty(&priv->ecus)) {
-		ecu = list_first_entry(&priv->ecus, struct j1939_ecu, list);
-		write_unlock_bh(&priv->lock);
-		j1939_ecu_unregister(ecu);
-		write_lock_bh(&priv->lock);
-	}
-	write_unlock_bh(&priv->lock);
-	priv_dbg(priv, "unregister\n");
-	put_j1939_priv(priv);
 }
 
 /*
@@ -373,6 +288,7 @@ struct j1939_ecu *j1939_ecu_find_by_name(name_t name, int ifindex)
 {
 	struct j1939_ecu *ecu;
 	struct j1939_priv *priv;
+	struct net_device *netdev;
 
 	if (!name)
 		return NULL;
@@ -384,10 +300,12 @@ struct j1939_ecu *j1939_ecu_find_by_name(name_t name, int ifindex)
 		put_j1939_priv(priv);
 		return ecu;
 	}
-	/* iterate segments */
-	spin_lock_bh(&segments.lock);
-	list_for_each_entry(priv, &segments.list, flist) {
-		get_j1939_priv(priv);
+
+	/* iterate netdevices */
+	for_each_netdev(&init_net, netdev) {
+		priv = dev_j1939_priv(netdev);
+		if (!priv)
+			continue;
 		ecu = _j1939_ecu_find_by_name(name, priv);
 		put_j1939_priv(priv);
 		if (ecu)
@@ -395,34 +313,5 @@ struct j1939_ecu *j1939_ecu_find_by_name(name_t name, int ifindex)
 	}
 	ecu = NULL;
 found:
-	spin_unlock_bh(&segments.lock);
 	return ecu;
 }
-
-/* exported init */
-int __init j1939bus_module_init(void)
-{
-	INIT_LIST_HEAD(&segments.list);
-	spin_lock_init(&segments.lock);
-	return 0;
-}
-
-void j1939bus_module_exit(void)
-{
-	struct j1939_priv *priv;
-	struct net_device *netdev;
-
-	spin_lock_bh(&segments.lock);
-	while (!list_empty(&segments.list)) {
-		priv = list_first_entry(&segments.list,
-				struct j1939_priv, flist);
-		netdev = dev_get_by_index(&init_net, priv->ifindex);
-		spin_unlock_bh(&segments.lock);
-		j1939_priv_detach(netdev);
-		dev_put(netdev);
-		spin_lock_bh(&segments.lock);
-	}
-	spin_unlock_bh(&segments.lock);
-}
-
-

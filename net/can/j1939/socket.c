@@ -228,7 +228,7 @@ static int j1939sk_bind_netdev_helper(struct socket *sock)
 	/* no need to test for CAN device,
 	 * implicitely done by j1939_priv
 	 */
-	priv = j1939_priv_find(netdev->ifindex);
+	priv = dev_j1939_priv(netdev);
 	if (!priv) {
 		ret = -EHOSTDOWN;
 		goto fail_priv;
