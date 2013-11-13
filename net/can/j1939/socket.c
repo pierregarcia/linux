@@ -812,16 +812,10 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 
 	if (msg->msg_name) {
 		struct sockaddr_can *addr = msg->msg_name;
-		if (addr->can_addr.j1939.name) {
-			ecu = j1939_ecu_find_by_name(addr->can_addr.j1939.name,
-					ifindex);
-			if (!ecu)
-				return -EADDRNOTAVAIL;
-			skb_cb->dst.name = ecu->name;
-			skb_cb->dst.addr = ecu->sa;
-			put_j1939_ecu(ecu);
-		} else {
-			skb_cb->dst.name = 0;
+
+		if (addr->can_addr.j1939.name ||
+				(addr->can_addr.j1939.addr != J1939_NO_ADDR)) {
+			skb_cb->dst.name = addr->can_addr.j1939.name;
 			skb_cb->dst.addr = addr->can_addr.j1939.addr;
 		}
 		if (pgn_is_valid(addr->can_addr.j1939.pgn))
@@ -857,51 +851,6 @@ free_skb:
 put_dev:
 	dev_put(dev);
 	return ret;
-}
-
-/* PROC */
-static int j1939sk_proc_show(struct seq_file *sqf, void *v)
-{
-	struct j1939_sock *jsk;
-	struct net_device *netdev;
-
-	seq_printf(sqf, "iface\tflags\tlocal\tremote\tpgn\tprio\tpending\n");
-	mutex_lock(&s.lock);
-	list_for_each_entry(jsk, &s.socks, list) {
-		lock_sock(&jsk->sk);
-		netdev = NULL;
-		if (jsk->sk.sk_bound_dev_if)
-			netdev = dev_get_by_index(&init_net,
-				jsk->sk.sk_bound_dev_if);
-		seq_printf(sqf, "%s\t", netdev ? netdev->name : "-");
-		if (netdev)
-			dev_put(netdev);
-		seq_printf(sqf, "%c%c%c%c\t",
-			(jsk->state & JSK_BOUND) ? 'b' : '-',
-			(jsk->state & JSK_CONNECTED) ? 'c' : '-',
-			(jsk->state & PROMISC) ? 'P' : '-',
-			(jsk->state & RECV_OWN) ? 'o' : '-');
-		if (jsk->addr.src)
-			seq_printf(sqf, "%016llx", (long long)jsk->addr.src);
-		else if (j1939_address_is_unicast(jsk->addr.sa))
-			seq_printf(sqf, "%02x", jsk->addr.sa);
-		else
-			seq_printf(sqf, "-");
-		seq_printf(sqf, "\t");
-		if (jsk->addr.dst)
-			seq_printf(sqf, "%016llx", (long long)jsk->addr.dst);
-		else if (j1939_address_is_unicast(jsk->addr.da))
-			seq_printf(sqf, "%02x", jsk->addr.da);
-		else
-			seq_printf(sqf, "-");
-		seq_printf(sqf, "\t%05x", jsk->addr.pgn);
-		seq_printf(sqf, "\t%u", j1939_prio(jsk->sk.sk_priority));
-		seq_printf(sqf, "\t%u", jsk->skb_pending);
-		release_sock(&jsk->sk);
-		seq_printf(sqf, "\n");
-	}
-	mutex_unlock(&s.lock);
-	return 0;
 }
 
 void j1939sk_netdev_event(int ifindex, int error_code)
@@ -969,14 +918,11 @@ __init int j1939sk_module_init(void)
 	ret = can_proto_register(&j1939_can_proto);
 	if (ret < 0)
 		pr_err("can: registration of j1939 protocol failed\n");
-	else
-		j1939_proc_add("sock", j1939sk_proc_show, NULL);
 	return ret;
 }
 
 void j1939sk_module_exit(void)
 {
-	j1939_proc_remove("sock");
 	can_proto_unregister(&j1939_can_proto);
 }
 

@@ -399,103 +399,11 @@ found:
 	return ecu;
 }
 
-/* PROC */
-static int j1939_proc_addr(struct seq_file *sqf, void *v)
-{
-	struct j1939_priv *priv;
-	struct net_device *netdev;
-	struct addr_ent *paddr;
-	int j, flags;
-	ktime_t now;
-	struct timeval tv;
-
-	now = ktime_get();
-	seq_printf(sqf, "iface\tSA\tflags\trxtime\n");
-	spin_lock_bh(&segments.lock);
-	list_for_each_entry(priv, &segments.list, flist) {
-		get_j1939_priv(priv);
-		netdev = dev_get_by_index(&init_net, priv->ifindex);
-		if (!netdev) {
-			pr_alert("j1939 proc: ifindex %i not found\n",
-				priv->ifindex);
-			put_j1939_priv(priv);
-			continue;
-		}
-		read_lock_bh(&priv->lock);
-		for (j = 0, paddr = priv->ents; j < J1939_IDLE_ADDR;
-				++j, ++paddr) {
-			flags = paddr->flags;
-			if (paddr->ecu)
-				flags |= paddr->ecu->flags;
-			tv = ktime_to_timeval(ktime_sub(now, paddr->rxtime));
-			if (!paddr->flags && !paddr->ecu)
-				continue;
-			seq_printf(sqf, "%s\t%02x\t%c%c%c%c\t-%lu.%06lu\n",
-				netdev->name, j,
-				(flags & ECUFLAG_LOCAL) ? 'L' : '-',
-				(flags & ECUFLAG_REMOTE) ? 'R' : '-',
-				(paddr->flags) ? 'S' : '-',
-				paddr->ecu ? 'E' : '-',
-				tv.tv_sec, tv.tv_usec);
-		}
-		read_unlock_bh(&priv->lock);
-		dev_put(netdev);
-		put_j1939_priv(priv);
-	}
-	spin_unlock_bh(&segments.lock);
-	return 0;
-}
-
-static int j1939_proc_ecu(struct seq_file *sqf, void *v)
-{
-	struct j1939_priv *priv;
-	struct j1939_ecu *ecu;
-	struct net_device *netdev;
-	ktime_t now;
-	struct timeval tv;
-	char sa[4];
-
-	now = ktime_get();
-	seq_printf(sqf, "iface\taddr\tname\tflags\trxtime\n");
-	spin_lock_bh(&segments.lock);
-	list_for_each_entry(priv, &segments.list, flist) {
-		get_j1939_priv(priv);
-		netdev = dev_get_by_index(&init_net, priv->ifindex);
-		if (!netdev) {
-			pr_alert("j1939 proc: ifindex %i not found\n",
-				priv->ifindex);
-			put_j1939_priv(priv);
-			continue;
-		}
-		read_lock_bh(&priv->lock);
-		list_for_each_entry(ecu, &priv->ecus, list) {
-			tv = ktime_to_timeval(ktime_sub(now, ecu->rxtime));
-			if (j1939_address_is_unicast(ecu->sa) &&
-				(ecu->parent->ents[ecu->sa].ecu == ecu))
-				snprintf(sa, sizeof(sa), "%02x", ecu->sa);
-			else
-				strcpy(sa, "-");
-			seq_printf(sqf, "%s\t%s\t%016llx\t%c\t-%lu.%06lu\n",
-				netdev->name, sa,
-				(unsigned long long)ecu->name,
-				(ecu->flags & ECUFLAG_LOCAL) ? 'L' : 'R',
-				tv.tv_sec, tv.tv_usec);
-		}
-		read_unlock_bh(&priv->lock);
-		dev_put(netdev);
-		put_j1939_priv(priv);
-	}
-	spin_unlock_bh(&segments.lock);
-	return 0;
-}
-
 /* exported init */
 int __init j1939bus_module_init(void)
 {
 	INIT_LIST_HEAD(&segments.list);
 	spin_lock_init(&segments.lock);
-	j1939_proc_add("addr", j1939_proc_addr, NULL);
-	j1939_proc_add("ecu", j1939_proc_ecu, NULL);
 	return 0;
 }
 
@@ -515,9 +423,6 @@ void j1939bus_module_exit(void)
 		spin_lock_bh(&segments.lock);
 	}
 	spin_unlock_bh(&segments.lock);
-
-	j1939_proc_remove("ecu");
-	j1939_proc_remove("addr");
 }
 
 

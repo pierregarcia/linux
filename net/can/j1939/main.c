@@ -30,6 +30,9 @@ MODULE_DESCRIPTION("PF_CAN SAE J1939");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("EIA Electronics (Kurt Van Dijck & Pieter Beyens)");
 
+const char j1939_procname[] = "can-j1939";
+struct proc_dir_entry *j1939_procdir;
+
 static struct {
 	struct notifier_block notifier;
 } s;
@@ -412,9 +415,10 @@ static __init int j1939_module_init(void)
 
 	pr_info("can: SAE J1939\n");
 
-	ret = j1939_proc_module_init();
-	if (ret < 0)
-		goto fail_proc;
+	/* create /proc/net/can directory */
+	j1939_procdir = proc_mkdir(j1939_procname, init_net.proc_net);
+	if (!j1939_procdir)
+		return -EINVAL;
 
 	s.notifier.notifier_call = j1939_notifier;
 	register_netdevice_notifier(&s.notifier);
@@ -437,9 +441,7 @@ fail_sk:
 	j1939bus_module_exit();
 fail_bus:
 	unregister_netdevice_notifier(&s.notifier);
-
-	j1939_proc_module_exit();
-fail_proc:
+	proc_net_remove(&init_net, j1939_procname);
 	return ret;
 }
 
@@ -451,7 +453,7 @@ static __exit void j1939_module_exit(void)
 
 	unregister_netdevice_notifier(&s.notifier);
 
-	j1939_proc_module_exit();
+	proc_net_remove(&init_net, j1939_procname);
 }
 
 module_init(j1939_module_init);
