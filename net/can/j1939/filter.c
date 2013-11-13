@@ -27,7 +27,7 @@ struct filter {
 	void (*fn)(struct sk_buff *, void *);
 };
 
-int j1939_recv_distribute(struct sk_buff *skb)
+int j1939_recv(struct sk_buff *skb)
 {
 	struct filter *filter;
 
@@ -38,6 +38,7 @@ int j1939_recv_distribute(struct sk_buff *skb)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(j1939_recv);
 
 int j1939_recv_add(void *vp, void (*fn)(struct sk_buff *, void *))
 {
