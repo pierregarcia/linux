@@ -118,8 +118,15 @@ static void j1939_can_recv(struct sk_buff *skb, void *data)
 		sk_addr->dst.addr = J1939_NO_ADDR;
 	}
 	j1939_recv_ecu_flags(skb, data);
-	j1939_recv(skb, j1939_level_can);
 
+	if (j1939_recv_address_claim(skb))
+		goto done;
+	if (j1939_recv_promisc(skb))
+		goto done;
+	if (j1939_recv_transport(skb))
+		goto done;
+	j1939_recv(skb);
+done:
 	/* restore the original skb, should always work */
 	skb_push(skb, CAN_HDR);
 	/* no safety check, it just restores the skbuf's contents */
@@ -259,37 +266,6 @@ failed:
 }
 
 /* TOPLEVEL interface */
-int j1939_recv(struct sk_buff *skb, int level)
-{
-	int ret;
-
-	/* this stack operates with fallthrough switch statement */
-	switch (level) {
-	default:
-		WARN_ONCE(1, "%s: unsupported level %i\n", __func__, level);
-		return 0;
-	case j1939_level_can:
-		ret = j1939_recv_address_claim(skb);
-		if (unlikely(ret))
-			break;
-		ret = j1939_recv_promisc(skb);
-		if (unlikely(ret))
-			break;
-		ret = j1939_recv_transport(skb);
-		if (unlikely(ret))
-			break;
-	case j1939_level_transport:
-	case j1939_level_sky:
-		ret = j1939_recv_distribute(skb);
-		break;
-	}
-	if (ret == RESULT_STOP)
-		return 0;
-	return ret;
-
-}
-EXPORT_SYMBOL_GPL(j1939_recv);
-
 int j1939_send(struct sk_buff *skb, int level)
 {
 	int ret;

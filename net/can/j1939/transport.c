@@ -479,7 +479,8 @@ static inline void j1939session_drop(struct session *session)
 
 static inline void j1939session_completed(struct session *session)
 {
-	j1939_recv(session->skb, j1939_level_transport);
+	/* distribute among j1939 receivers */
+	j1939_recv(session->skb);
 	j1939session_drop(session);
 }
 

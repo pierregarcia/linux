@@ -230,7 +230,7 @@ enum {
  */
 
 extern int j1939_send(struct sk_buff *, int level);
-extern int j1939_recv(struct sk_buff *, int level);
+extern int j1939_recv(struct sk_buff *);
 
 /* stack entries */
 extern int j1939_recv_promisc(struct sk_buff *);
