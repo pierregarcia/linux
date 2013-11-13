@@ -333,22 +333,42 @@ EXPORT_SYMBOL_GPL(j1939_send);
 
 /* NETDEV MANAGEMENT */
 
+/* values for can_rx_(un)register */
 #define J1939_CAN_ID	CAN_EFF_FLAG
 #define J1939_CAN_MASK	(CAN_EFF_FLAG | CAN_RTR_FLAG)
-int j1939_priv_attach(struct net_device *netdev)
+
+int netdev_enable_j1939(struct net_device *netdev)
 {
 	int ret;
 	struct j1939_priv *priv;
+	struct dev_rcv_lists *can_ml_priv;
 
-	if (!netdev)
-		return -ENODEV;
+	BUG_ON(!netdev);
 	if (netdev->type != ARPHRD_CAN)
 		return -EAFNOSUPPORT;
 
-	ret = j1939_priv_register(netdev);
+	/* create/stuff j1939_priv */
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+	tasklet_init(&priv->ac_task, j1939_priv_ac_task, (unsigned long)priv);
+	rwlock_init(&priv->lock);
+	INIT_LIST_HEAD(&priv->ecus);
+	INIT_LIST_HEAD(&priv->flist);
+	priv->ifindex = netdev->ifindex;
+	kref_init(&priv->kref);
+
+	/* link into netdev */
+	spin_lock(&can_rcvlists_lock);
+	can_ml_priv = netdev->ml_priv;
+	if (!can_ml_priv->j1939_priv)
+		can_ml_priv->j1939_priv = priv;
+	ret = (can_ml_priv->j1939_priv == priv) ? 0 : -EBUSY;
+	spin_unlock(&can_rcvlists_lock);
 	if (ret < 0)
 		goto fail_register;
-	priv = j1939_priv_find(netdev->ifindex);
+
+	/* add CAN handler */
 	ret = can_rx_register(netdev, J1939_CAN_ID, J1939_CAN_MASK,
 			j1939_can_recv, priv, "j1939");
 	if (ret < 0)
@@ -356,33 +376,55 @@ int j1939_priv_attach(struct net_device *netdev)
 	return 0;
 
 fail_can_rx:
-	j1939_priv_unregister(priv);
-	put_j1939_priv(priv);
+	netdev_disable_j1939(netdev);
+	return ret;
+
 fail_register:
+	kfree(priv);
 	return ret;
 }
 
-int j1939_priv_detach(struct net_device *netdev)
+int netdev_disable_j1939(struct net_device *netdev)
 {
+	struct dev_rcv_lists *can_ml_priv;
 	struct j1939_priv *priv;
+	struct j1939_ecu *ecu;
 
 	BUG_ON(!netdev);
-	priv = j1939_priv_find(netdev->ifindex);
+
+	/* unlink from netdev */
+	spin_lock(&can_rcvlists_lock);
+	can_ml_priv = netdev->ml_priv;
+	priv = can_ml_priv->j1939_priv;
+	can_ml_priv->j1939_priv = NULL;
+	spin_unlock(&can_rcvlists_lock);
 	if (!priv)
-		return -EHOSTDOWN;
+		return 0;
 	can_rx_unregister(netdev, J1939_CAN_ID, J1939_CAN_MASK,
 			j1939_can_recv, priv);
-	j1939_priv_unregister(priv);
+
+	/* cleanup priv */
+	write_lock_bh(&priv->lock);
+	while (!list_empty(&priv->ecus)) {
+		ecu = list_first_entry(&priv->ecus, struct j1939_ecu, list);
+		write_unlock_bh(&priv->lock);
+		j1939_ecu_unregister(ecu);
+		write_lock_bh(&priv->lock);
+	}
+	write_unlock_bh(&priv->lock);
+
+	/* final put */
 	put_j1939_priv(priv);
+	/* notify j1939 sockets */
 	j1939sk_netdev_event(netdev->ifindex, EHOSTDOWN);
 	return 0;
 }
+
 
 static int j1939_notifier(struct notifier_block *nb,
 			unsigned long msg, void *data)
 {
 	struct net_device *netdev = (struct net_device *)data;
-	struct j1939_priv *priv;
 
 	if (!net_eq(dev_net(netdev), &init_net))
 		return NOTIFY_DONE;
@@ -392,10 +434,7 @@ static int j1939_notifier(struct notifier_block *nb,
 
 	switch (msg) {
 	case NETDEV_UNREGISTER:
-		priv = j1939_priv_find(netdev->ifindex);
-		if (!priv)
-			break;
-		j1939_priv_unregister(priv);
+		netdev_disable_j1939(netdev);
 		j1939sk_netdev_event(netdev->ifindex, ENODEV);
 		break;
 
@@ -423,9 +462,6 @@ static __init int j1939_module_init(void)
 	s.notifier.notifier_call = j1939_notifier;
 	register_netdevice_notifier(&s.notifier);
 
-	ret = j1939bus_module_init();
-	if (ret < 0)
-		goto fail_bus;
 	ret = j1939sk_module_init();
 	if (ret < 0)
 		goto fail_sk;
@@ -438,8 +474,6 @@ static __init int j1939_module_init(void)
 fail_tp:
 	j1939sk_module_exit();
 fail_sk:
-	j1939bus_module_exit();
-fail_bus:
 	unregister_netdevice_notifier(&s.notifier);
 	proc_net_remove(&init_net, j1939_procname);
 	return ret;
@@ -447,9 +481,18 @@ fail_bus:
 
 static __exit void j1939_module_exit(void)
 {
+	struct net_device *netdev;
+
+	/* shutdown j1939 for all netdevs */
+	for_each_netdev(&init_net, netdev) {
+		if (netdev->type != ARPHRD_CAN)
+			continue;
+		/* netdev disable only disables when j1939 active */
+		netdev_disable_j1939(netdev);
+	}
+
 	j1939tp_module_exit();
 	j1939sk_module_exit();
-	j1939bus_module_exit();
 
 	unregister_netdevice_notifier(&s.notifier);
 

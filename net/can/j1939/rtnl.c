@@ -188,10 +188,7 @@ int j1939rtnl_dump_addr(struct sk_buff *skb, struct netlink_callback *cb)
 		++ndev;
 		if (ndev < cb->args[1])
 			continue;
-		if (netdev->type != ARPHRD_CAN)
-			continue;
-
-		priv = j1939_priv_find(netdev->ifindex);
+		priv = dev_j1939_priv(netdev);
 		if (!priv)
 			continue;
 
@@ -265,12 +262,17 @@ static int j1939_validate_link_af(const struct net_device *dev,
 static int j1939_fill_link_af(struct sk_buff *skb, const struct net_device *dev)
 {
 	struct j1939_priv *priv;
+	struct dev_rcv_lists *can_ml_priv;
 
-	if (!dev)
+	BUG_ON(!dev);
+
+	if (dev->type != ARPHRD_CAN)
 		return -ENODEV;
-	priv = j1939_priv_find(dev->ifindex);
-	if (priv)
-		put_j1939_priv(priv);
+
+	spin_lock(&can_rcvlists_lock);
+	can_ml_priv = dev->ml_priv;
+	priv = can_ml_priv->j1939_priv;
+	spin_unlock(&can_rcvlists_lock);
 	if (nla_put_u8(skb, IFLA_J1939_ENABLE, priv ? 1 : 0) < 0)
 		return -EMSGSIZE;
 	return 0;
@@ -287,9 +289,9 @@ static int j1939_set_link_af(struct net_device *dev, const struct nlattr *nla)
 
 	if (tb[IFLA_J1939_ENABLE]) {
 		if (nla_get_u8(tb[IFLA_J1939_ENABLE]))
-			ret = j1939_priv_attach(dev);
+			ret = netdev_enable_j1939(dev);
 		else
-			ret = j1939_priv_detach(dev);
+			ret = netdev_enable_j1939(dev);
 		if (ret < 0)
 			return ret;
 	}

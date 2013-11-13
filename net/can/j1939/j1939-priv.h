@@ -20,6 +20,9 @@
 #include <linux/can/j1939.h>
 #include <linux/atomic.h>
 #include <linux/interrupt.h>
+#include <linux/if_arp.h>
+
+#include "../af_can.h"
 
 /* TODO: return ENETRESET on busoff. */
 
@@ -252,13 +255,34 @@ extern struct j1939_ecu *j1939_ecu_get_register(name_t name, int ifindex,
 		int flags, int return_existing);
 extern void j1939_ecu_unregister(struct j1939_ecu *);
 
-extern int j1939_priv_attach(struct net_device *);
-extern int j1939_priv_detach(struct net_device *);
+extern int netdev_enable_j1939(struct net_device *);
+extern int netdev_disable_j1939(struct net_device *);
 
-extern int j1939_priv_register(struct net_device *);
-extern void j1939_priv_unregister(struct j1939_priv *);
-extern struct j1939_priv *j1939_priv_find(int ifindex);
+static inline struct j1939_priv *dev_j1939_priv(struct net_device *dev)
+{
+	struct dev_rcv_lists *can_ml_priv;
+	struct j1939_priv *priv;
 
+	if (dev->type != ARPHRD_CAN)
+		return NULL;
+
+	spin_lock(&can_rcvlists_lock);
+	can_ml_priv = dev->ml_priv;
+	priv = can_ml_priv ? can_ml_priv->j1939_priv : NULL;
+	if (priv)
+		get_j1939_priv(priv);
+	spin_unlock(&can_rcvlists_lock);
+	return priv;
+}
+
+static inline struct j1939_priv *j1939_priv_find(int ifindex)
+{
+	return dev_j1939_priv(dev_get_by_index(&init_net, ifindex));
+}
+
+extern void j1939_priv_ac_task(unsigned long val);
+
+/* notify/alert all j1939 sockets bound to ifindex */
 extern void j1939sk_netdev_event(int ifindex, int error_code);
 
 /* add/remove receiver */
@@ -290,11 +314,9 @@ extern void j1939_recv_resume(void);
 extern void j1939_sock_pending_del(struct sock *sk);
 
 /* seperate module-init/modules-exit's */
-extern __init int j1939bus_module_init(void);
 extern __init int j1939sk_module_init(void);
 extern __init int j1939tp_module_init(void);
 
-extern void j1939bus_module_exit(void);
 extern void j1939sk_module_exit(void);
 extern void j1939tp_module_exit(void);
 
