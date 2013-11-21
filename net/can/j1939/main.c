@@ -194,7 +194,7 @@ failed:
 	return ret;
 }
 
-static int j1939_send_normalize(struct sk_buff *skb)
+int j1939_send(struct sk_buff *skb)
 {
 	struct j1939_sk_buff_cb *cb = (void *)skb->cb;
 	struct j1939_priv *priv;
@@ -210,9 +210,13 @@ static int j1939_send_normalize(struct sk_buff *skb)
 	/* verify source */
 	if (!cb->ifindex)
 		return -ENETUNREACH;
+
 	priv = j1939_priv_find(cb->ifindex);
 	if (!priv)
 		return -ENETUNREACH;
+
+	sock_hold(skb->sk);
+
 	read_lock_bh(&priv->lock);
 	/* verify source */
 	if (cb->src.name) {
@@ -232,10 +236,10 @@ static int j1939_send_normalize(struct sk_buff *skb)
 	}
 	if (cb->src.flags & ECUFLAG_REMOTE) {
 		ret = -EREMOTE;
-		goto failed;
+		goto done;
 	} else if (!(cb->src.flags & ECUFLAG_LOCAL)) {
 		ret = -EADDRNOTAVAIL;
-		goto failed;
+		goto done;
 	}
 
 	/* verify destination */
@@ -243,14 +247,14 @@ static int j1939_send_normalize(struct sk_buff *skb)
 		ecu = j1939_ecu_find_by_name(cb->dst.name, cb->ifindex);
 		if (!ecu) {
 			ret = -EADDRNOTAVAIL;
-			goto failed;
+			goto done;
 		}
 		cb->dst.flags = ecu->flags;
 		put_j1939_ecu(ecu);
 	} else if (cb->dst.addr == J1939_IDLE_ADDR) {
 		/* not a valid destination */
 		ret = -EADDRNOTAVAIL;
-		goto failed;
+		goto done;
 	} else if (j1939_address_is_unicast(cb->dst.addr)) {
 		paddr = &priv->ents[cb->dst.addr];
 		cb->dst.flags = paddr->flags;
@@ -258,54 +262,35 @@ static int j1939_send_normalize(struct sk_buff *skb)
 		cb->dst.flags = 0;
 	}
 
-	ret = 0;
-failed:
+	ret = j1939_send_transport(skb);
+	if (unlikely(ret))
+		goto done;
+	ret = j1939_send_address_claim(skb);
+	if (unlikely(ret))
+		goto done;
+	ret = j1939_send_can(skb);
+done:
+	/* don't mark as failed, it can't be better */
+	if (ret == RESULT_STOP)
+		ret = 0;
 	read_unlock_bh(&priv->lock);
+	sock_put(skb->sk);
 	put_j1939_priv(priv);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(j1939_send);
 
-/* TOPLEVEL interface */
-int j1939_send(struct sk_buff *skb, int level)
+/* send a packet of max 8 bytes, without testing metadata */
+int j1939_send_normalized_pkt(struct sk_buff *skb)
 {
 	int ret;
-	struct sock *sk = NULL;
 
-	/* this stack operates with fallthrough switch statement */
-	switch (level) {
-	default:
-		WARN_ONCE(1, "%s: unsupported level %i\n", __func__, level);
-	case j1939_level_sky:
-		sk = skb->sk;
-		if (sk)
-			sock_hold(sk);
-		ret = j1939_send_normalize(skb);
-		if (unlikely(ret))
-			break;
-		ret = j1939_send_transport(skb);
-		if (unlikely(ret))
-			break;
-	case j1939_level_transport:
-		ret = j1939_send_address_claim(skb);
-		if (unlikely(ret))
-			break;
-	case j1939_level_can:
-		ret = j1939_send_can(skb);
-		if (RESULT_STOP == ret)
-			/* don't mark as stopped, it can't be better */
-			ret = 0;
-		break;
-	}
-	if (ret == RESULT_STOP)
-		ret = 0;
-	else if (!ret && sk)
-		j1939_sock_pending_del(sk);
-	if (sk)
-		sock_put(sk);
-	return ret;
-
+	ret = j1939_send_address_claim(skb);
+	if (unlikely(ret))
+		return ret;
+	return j1939_send_can(skb);
 }
-EXPORT_SYMBOL_GPL(j1939_send);
+
 
 /* NETDEV MANAGEMENT */
 

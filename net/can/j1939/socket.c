@@ -842,7 +842,7 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 		j1939_sock_pending_add(&jsk->sk);
 	}
 
-	ret = j1939_send(skb, j1939_level_sky);
+	ret = j1939_send(skb);
 	if (ret < 0)
 		goto decrement_pending;
 
