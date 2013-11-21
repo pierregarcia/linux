@@ -315,11 +315,12 @@ extern void j1939_recv_resume(void);
 extern void j1939_sock_pending_del(struct sock *sk);
 
 /* seperate module-init/modules-exit's */
-extern __init int j1939sk_module_init(void);
 extern __init int j1939tp_module_init(void);
 
-extern void j1939sk_module_exit(void);
 extern void j1939tp_module_exit(void);
+
+/* CAN protocol */
+extern const struct can_proto j1939_can_proto;
 
 /* rtnetlink */
 extern const struct rtnl_af_ops j1939_rtnl_af_ops;

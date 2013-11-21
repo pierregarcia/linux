@@ -899,7 +899,7 @@ static struct proto j1939_proto __read_mostly = {
 	.init = j1939sk_init,
 };
 
-static const struct can_proto j1939_can_proto = {
+const struct can_proto j1939_can_proto = {
 	.type = SOCK_DGRAM,
 	.protocol = CAN_J1939,
 	.ops = &j1939_ops,
@@ -910,21 +910,3 @@ static const struct can_proto j1939_can_proto = {
 	.rtnl_del_addr = j1939rtnl_del_addr,
 	.rtnl_dump_addr = j1939rtnl_dump_addr,
 };
-
-__init int j1939sk_module_init(void)
-{
-	int ret;
-
-	ret = can_proto_register(&j1939_can_proto);
-	if (ret < 0)
-		pr_err("can: registration of j1939 protocol failed\n");
-	return ret;
-}
-
-void j1939sk_module_exit(void)
-{
-	can_proto_unregister(&j1939_can_proto);
-}
-
-MODULE_ALIAS("can-proto-" __stringify(CAN_J1939));
-
