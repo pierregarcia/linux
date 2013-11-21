@@ -229,7 +229,8 @@ enum {
  * it is up to the stack entry itself to kfree_skb() the sk_buff
  */
 
-extern int j1939_send(struct sk_buff *, int level);
+extern int j1939_send_normalized_pkt(struct sk_buff *);
+extern int j1939_send(struct sk_buff *);
 extern int j1939_recv(struct sk_buff *);
 
 /* stack entries */

@@ -361,7 +361,7 @@ static int j1939tp_tx_dat(struct session *related,
 
 	skdat = skb_put(skb, len);
 	memcpy(skdat, dat, len);
-	ret = j1939_send(skb, j1939_level_transport);
+	ret = j1939_send_normalized_pkt(skb);
 	if (ret < 0)
 		kfree_skb(skb);
 	return ret;
@@ -402,7 +402,7 @@ static int j1939xtp_do_tx_ctl(struct sk_buff *related, int extd,
 	skdat[6] = (pgn >>  8) & 0xff;
 	skdat[5] = (pgn >>  0) & 0xff;
 
-	ret = j1939_send(skb, j1939_level_transport);
+	ret = j1939_send_normalized_pkt(skb);
 	if (ret)
 		kfree_skb(skb);
 	return ret;
