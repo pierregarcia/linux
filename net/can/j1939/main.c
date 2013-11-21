@@ -34,10 +34,6 @@ MODULE_ALIAS("can-proto-" __stringify(CAN_J1939));
 const char j1939_procname[] = "can-j1939";
 struct proc_dir_entry *j1939_procdir;
 
-static struct {
-	struct notifier_block notifier;
-} s;
-
 /* LOWLEVEL CAN interface */
 
 /* CAN_HDR: #bytes before can_frame data part */
@@ -383,7 +379,7 @@ int netdev_disable_j1939(struct net_device *netdev)
 }
 
 
-static int j1939_notifier(struct notifier_block *nb,
+static int j1939_netdev_notify(struct notifier_block *nb,
 			unsigned long msg, void *data)
 {
 	struct net_device *netdev = (struct net_device *)data;
@@ -397,6 +393,7 @@ static int j1939_notifier(struct notifier_block *nb,
 	switch (msg) {
 	case NETDEV_UNREGISTER:
 		netdev_disable_j1939(netdev);
+		j1939tp_rmdev_notifier(netdev);
 		j1939sk_netdev_event(netdev->ifindex, ENODEV);
 		break;
 
@@ -407,6 +404,10 @@ static int j1939_notifier(struct notifier_block *nb,
 
 	return NOTIFY_DONE;
 }
+
+static struct notifier_block j1939_netdev_notifier = {
+	.notifier_call = j1939_netdev_notify,
+};
 
 /* MODULE interface */
 
@@ -421,8 +422,7 @@ static __init int j1939_module_init(void)
 	if (!j1939_procdir)
 		return -EINVAL;
 
-	s.notifier.notifier_call = j1939_notifier;
-	register_netdevice_notifier(&s.notifier);
+	register_netdevice_notifier(&j1939_netdev_notifier);
 
 	ret = can_proto_register(&j1939_can_proto);
 	if (ret < 0) {
@@ -438,7 +438,7 @@ static __init int j1939_module_init(void)
 fail_tp:
 	can_proto_unregister(&j1939_can_proto);
 fail_sk:
-	unregister_netdevice_notifier(&s.notifier);
+	unregister_netdevice_notifier(&j1939_netdev_notifier);
 	proc_net_remove(&init_net, j1939_procname);
 	return ret;
 }
@@ -459,7 +459,7 @@ static __exit void j1939_module_exit(void)
 
 	can_proto_unregister(&j1939_can_proto);
 
-	unregister_netdevice_notifier(&s.notifier);
+	unregister_netdevice_notifier(&j1939_netdev_notifier);
 
 	proc_net_remove(&init_net, j1939_procname);
 }

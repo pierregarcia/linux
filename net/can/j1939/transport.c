@@ -97,7 +97,6 @@ static struct j1939tp {
 		struct work_struct work;
 	} del;
 	wait_queue_head_t wait;
-	struct notifier_block notifier;
 } s;
 
 static struct session *j1939session_new(struct sk_buff *skb);
@@ -1294,20 +1293,9 @@ static struct session *j1939session_new(struct sk_buff *skb)
 	return session;
 }
 
-static int j1939tp_notifier(struct notifier_block *nb,
-			unsigned long msg, void *data)
+int j1939tp_rmdev_notifier(struct net_device *netdev)
 {
-	struct net_device *netdev = (struct net_device *)data;
 	struct session *session, *saved;
-
-	if (!net_eq(dev_net(netdev), &init_net))
-		return NOTIFY_DONE;
-
-	if (netdev->type != ARPHRD_CAN)
-		return NOTIFY_DONE;
-
-	if (msg != NETDEV_UNREGISTER)
-		return NOTIFY_DONE;
 
 	sessionlist_lock();
 	list_for_each_entry_safe(session, saved, &s.sessionq, list) {
@@ -1434,9 +1422,6 @@ int __init j1939tp_module_init(void)
 	if (!proc_create("transport", 0400, j1939_procdir, &j1939tp_proc_ops))
 		return -ENOMEM;
 
-	s.notifier.notifier_call = j1939tp_notifier;
-	register_netdevice_notifier(&s.notifier);
-
 	j1939tp_table_header =
 		register_sysctl_paths(j1939tp_path, j1939tp_table);
 	init_waitqueue_head(&s.wait);
@@ -1450,7 +1435,6 @@ void j1939tp_module_exit(void)
 	wake_up_all(&s.wait);
 
 	unregister_sysctl_table(j1939tp_table_header);
-	unregister_netdevice_notifier(&s.notifier);
 	remove_proc_entry("transport", j1939_procdir);
 	sessionlist_lock();
 	list_for_each_entry_safe(session, saved, &s.extsessionq, list) {
