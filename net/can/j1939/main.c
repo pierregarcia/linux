@@ -29,6 +29,7 @@
 MODULE_DESCRIPTION("PF_CAN SAE J1939");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("EIA Electronics (Kurt Van Dijck & Pieter Beyens)");
+MODULE_ALIAS("can-proto-" __stringify(CAN_J1939));
 
 const char j1939_procname[] = "can-j1939";
 struct proc_dir_entry *j1939_procdir;
@@ -423,9 +424,11 @@ static __init int j1939_module_init(void)
 	s.notifier.notifier_call = j1939_notifier;
 	register_netdevice_notifier(&s.notifier);
 
-	ret = j1939sk_module_init();
-	if (ret < 0)
+	ret = can_proto_register(&j1939_can_proto);
+	if (ret < 0) {
+		pr_err("can: registration of j1939 protocol failed\n");
 		goto fail_sk;
+	}
 	ret = j1939tp_module_init();
 	if (ret < 0)
 		goto fail_tp;
@@ -433,7 +436,7 @@ static __init int j1939_module_init(void)
 
 	j1939tp_module_exit();
 fail_tp:
-	j1939sk_module_exit();
+	can_proto_unregister(&j1939_can_proto);
 fail_sk:
 	unregister_netdevice_notifier(&s.notifier);
 	proc_net_remove(&init_net, j1939_procname);
@@ -453,7 +456,8 @@ static __exit void j1939_module_exit(void)
 	}
 
 	j1939tp_module_exit();
-	j1939sk_module_exit();
+
+	can_proto_unregister(&j1939_can_proto);
 
 	unregister_netdevice_notifier(&s.notifier);
 
