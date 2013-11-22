@@ -46,9 +46,9 @@
 #define MAX_TP_PACKET_SIZE	(7*255)
 #define MAX_ETP_PACKET_SIZE	(7*0xffffff)
 
-static int block = 255;
-static int max_packet_size = 1024*100;
-static int retry_ms = 20;
+static unsigned int block = 255;
+static unsigned int max_packet_size = 1024*100;
+static unsigned int retry_ms = 20;
 
 struct session {
 	struct list_head list;
@@ -910,8 +910,8 @@ static int j1939tp_txnext(struct session *session)
 {
 	uint8_t dat[8];
 	const uint8_t *tpdat;
-	int ret, offset, len, pkt_done, pkt_end;
-	unsigned int pkt;
+	int ret, offset, pkt_done, pkt_end;
+	unsigned int pkt, len;
 
 	memset(dat, 0xff, sizeof(dat));
 	get_session(session); /* do not loose it */
