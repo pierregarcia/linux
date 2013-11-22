@@ -50,6 +50,14 @@ static unsigned int block = 255;
 static unsigned int max_packet_size = 1024*100;
 static unsigned int retry_ms = 20;
 
+module_param_named(transport_burst_count, block, uint, 0644);
+module_param_named(transport_max_size, max_packet_size, uint, 0644);
+module_param_named(transport_retry_time, retry_ms, uint, 0644);
+
+MODULE_PARM_DESC(transport_burst_count, "Number of packets to send in burst between flow control (1..255, default 255)");
+MODULE_PARM_DESC(transport_max_size, "Maximum packet size (default 100k)");
+MODULE_PARM_DESC(transport_retry_time, "CAN frame retransmission timeout in msecs. This is only used during transport sessions. (default 20)");
+
 struct session {
 	struct list_head list;
 	atomic_t refs;
@@ -1312,54 +1320,6 @@ int j1939tp_rmdev_notifier(struct net_device *netdev)
 	return NOTIFY_DONE;
 }
 
-/* SYSCTL */
-static struct ctl_table_header *j1939tp_table_header;
-
-static int min_block = 1;
-static int max_block = 255;
-static int min_packet = 8;
-static int max_packet = ((2 << 24)-1)*7;
-
-static int min_retry = 5;
-static int max_retry = 5000;
-
-static ctl_table j1939tp_table[] = {
-	{
-		.procname	= "transport_cts_nr_of_frames",
-		.data		= &block,
-		.maxlen		= sizeof(block),
-		.mode		= 0644,
-		.proc_handler	= &proc_dointvec_minmax,
-		.extra1		= &min_block,
-		.extra2		= &max_block,
-	},
-	{
-		.procname	= "transport_max_payload_in_bytes",
-		.data		= &max_packet_size,
-		.maxlen		= sizeof(max_packet_size),
-		.mode		= 0644,
-		.proc_handler	= &proc_dointvec_minmax,
-		.extra1		= &min_packet,
-		.extra2		= &max_packet,
-	},
-	{
-		.procname	= "transport_tx_retry_ms",
-		.data		= &retry_ms,
-		.maxlen		= sizeof(retry_ms),
-		.mode		= 0644,
-		.proc_handler	= &proc_dointvec_minmax,
-		.extra1		= &min_retry,
-		.extra2		= &max_retry,
-	},
-	{ },
-};
-
-static struct ctl_path j1939tp_path[] = {
-	{ .procname = "net", },
-	{ .procname = j1939_procname, },
-	{ }
-};
-
 /* PROC */
 static int j1939tp_proc_show_session(struct seq_file *sqf,
 		struct session *session)
@@ -1412,9 +1372,6 @@ int __init j1939tp_module_init(void)
 {
 	if (!proc_create("transport", 0400, j1939_procdir, &j1939tp_proc_ops))
 		return -ENOMEM;
-
-	j1939tp_table_header =
-		register_sysctl_paths(j1939tp_path, j1939tp_table);
 	return 0;
 }
 
@@ -1424,7 +1381,6 @@ void j1939tp_module_exit(void)
 
 	wake_up_all(&tp_wait);
 
-	unregister_sysctl_table(j1939tp_table_header);
 	remove_proc_entry("transport", j1939_procdir);
 	sessionlist_lock();
 	list_for_each_entry_safe(session, saved, &tp_extsessionq, list) {
