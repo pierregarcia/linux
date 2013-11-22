@@ -87,22 +87,22 @@ struct session {
 	struct tasklet_struct txtask, rxtask;
 };
 
-static struct j1939tp {
-	spinlock_t lock;
-	struct list_head sessionq;
-	struct list_head extsessionq;
-	struct {
-		struct list_head sessionq;
-		spinlock_t lock;
-		struct work_struct work;
-	} del;
-	wait_queue_head_t wait;
-} s;
-
+/* forward declarations */
 static struct session *j1939session_new(struct sk_buff *skb);
 static struct session *j1939session_fresh_new(int size,
 		struct j1939_sk_buff_cb *rel_cb, pgn_t pgn);
+static void j1939tp_del_work(struct work_struct *work);
 
+/* local variables */
+static DEFINE_SPINLOCK(tp_lock);
+static struct list_head tp_sessionq = LIST_HEAD_INIT(tp_sessionq);
+static struct list_head tp_extsessionq = LIST_HEAD_INIT(tp_extsessionq);
+static DEFINE_SPINLOCK(tp_dellock);
+static struct list_head tp_delsessionq = LIST_HEAD_INIT(tp_delsessionq);
+static DECLARE_WORK(tp_delwork, j1939tp_del_work);
+static DECLARE_WAIT_QUEUE_HEAD(tp_wait);
+
+/* helpers */
 static inline void fix_cb(struct j1939_sk_buff_cb *cb)
 {
 	cb->msg_flags &= ~J1939_MSG_RESERVED;
@@ -110,7 +110,7 @@ static inline void fix_cb(struct j1939_sk_buff_cb *cb)
 
 static inline struct list_head *sessionq(int extd)
 {
-	return extd ? &s.extsessionq : &s.sessionq;
+	return extd ? &tp_extsessionq : &tp_sessionq;
 }
 
 static inline void j1939session_destroy(struct session *session)
@@ -132,15 +132,15 @@ static void j1939tp_del_work(struct work_struct *work)
 
 	do {
 		session = NULL;
-		spin_lock_bh(&s.del.lock);
-		if (list_empty(&s.del.sessionq)) {
-			spin_unlock_bh(&s.del.lock);
+		spin_lock_bh(&tp_dellock);
+		if (list_empty(&tp_delsessionq)) {
+			spin_unlock_bh(&tp_dellock);
 			break;
 		}
-		session = list_first_entry(&s.del.sessionq,
+		session = list_first_entry(&tp_delsessionq,
 				struct session, list);
 		list_del_init(&session->list);
-		spin_unlock_bh(&s.del.lock);
+		spin_unlock_bh(&tp_dellock);
 		j1939session_destroy(session);
 		++cnt;
 	} while (1);
@@ -166,10 +166,10 @@ static void put_session(struct session *session)
 	tasklet_disable_nosync(&session->txtask);
 
 	if (in_interrupt()) {
-		spin_lock_bh(&s.del.lock);
-		list_add_tail(&session->list, &s.del.sessionq);
-		spin_unlock_bh(&s.del.lock);
-		schedule_work(&s.del.work);
+		spin_lock_bh(&tp_dellock);
+		list_add_tail(&session->list, &tp_delsessionq);
+		spin_unlock_bh(&tp_dellock);
+		schedule_work(&tp_delwork);
 	} else {
 		/* destroy session right here */
 		j1939session_destroy(session);
@@ -191,12 +191,12 @@ static inline void session_unlock(struct session *session)
 
 static inline void sessionlist_lock(void)
 {
-	spin_lock_bh(&s.lock);
+	spin_lock_bh(&tp_lock);
 }
 
 static inline void sessionlist_unlock(void)
 {
-	spin_unlock_bh(&s.lock);
+	spin_unlock_bh(&tp_lock);
 }
 
 /*
@@ -471,7 +471,7 @@ static inline void j1939session_drop(struct session *session)
 	if (session->transmission) {
 		if (session->skb && session->skb->sk)
 			j1939_sock_pending_del(session->skb->sk);
-		wake_up_all(&s.wait);
+		wake_up_all(&tp_wait);
 	}
 	put_session(session);
 }
@@ -1156,7 +1156,7 @@ int j1939_send_transport(struct sk_buff *skb)
 	if (session->cb->msg_flags & MSG_DONTWAIT)
 		ret = j1939session_insert(session) ? 0 : -EAGAIN;
 	else
-		ret = wait_event_interruptible(s.wait,
+		ret = wait_event_interruptible(tp_wait,
 				j1939session_insert(session));
 	if (ret < 0)
 		goto failed;
@@ -1298,13 +1298,13 @@ int j1939tp_rmdev_notifier(struct net_device *netdev)
 	struct session *session, *saved;
 
 	sessionlist_lock();
-	list_for_each_entry_safe(session, saved, &s.sessionq, list) {
+	list_for_each_entry_safe(session, saved, &tp_sessionq, list) {
 		if (session->cb->ifindex != netdev->ifindex)
 			continue;
 		list_del_init(&session->list);
 		put_session(session);
 	}
-	list_for_each_entry_safe(session, saved, &s.extsessionq, list) {
+	list_for_each_entry_safe(session, saved, &tp_extsessionq, list) {
 		if (session->cb->ifindex != netdev->ifindex)
 			continue;
 		list_del_init(&session->list);
@@ -1388,9 +1388,9 @@ static int j1939tp_proc_show(struct seq_file *sqf, void *v)
 
 	seq_printf(sqf, "iface\tsrc\tdst\tpgn\tdone/total\n");
 	sessionlist_lock();
-	list_for_each_entry(session, &s.sessionq, list)
+	list_for_each_entry(session, &tp_sessionq, list)
 		j1939tp_proc_show_session(sqf, session);
-	list_for_each_entry(session, &s.extsessionq, list)
+	list_for_each_entry(session, &tp_extsessionq, list)
 		j1939tp_proc_show_session(sqf, session);
 	sessionlist_unlock();
 	return 0;
@@ -1412,19 +1412,11 @@ static const struct file_operations j1939tp_proc_ops = {
 /* module init */
 int __init j1939tp_module_init(void)
 {
-	spin_lock_init(&s.lock);
-	INIT_LIST_HEAD(&s.sessionq);
-	INIT_LIST_HEAD(&s.extsessionq);
-	spin_lock_init(&s.del.lock);
-	INIT_LIST_HEAD(&s.del.sessionq);
-	INIT_WORK(&s.del.work, j1939tp_del_work);
-
 	if (!proc_create("transport", 0400, j1939_procdir, &j1939tp_proc_ops))
 		return -ENOMEM;
 
 	j1939tp_table_header =
 		register_sysctl_paths(j1939tp_path, j1939tp_table);
-	init_waitqueue_head(&s.wait);
 	return 0;
 }
 
@@ -1432,16 +1424,16 @@ void j1939tp_module_exit(void)
 {
 	struct session *session, *saved;
 
-	wake_up_all(&s.wait);
+	wake_up_all(&tp_wait);
 
 	unregister_sysctl_table(j1939tp_table_header);
 	remove_proc_entry("transport", j1939_procdir);
 	sessionlist_lock();
-	list_for_each_entry_safe(session, saved, &s.extsessionq, list) {
+	list_for_each_entry_safe(session, saved, &tp_extsessionq, list) {
 		list_del_init(&session->list);
 		put_session(session);
 	}
-	list_for_each_entry_safe(session, saved, &s.sessionq, list) {
+	list_for_each_entry_safe(session, saved, &tp_sessionq, list) {
 		list_del_init(&session->list);
 		put_session(session);
 	}
