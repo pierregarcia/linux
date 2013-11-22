@@ -26,7 +26,7 @@
  * list of sockets
  */
 static struct list_head j1939_socks = LIST_HEAD_INIT(j1939_socks);
-static DEFINE_MUTEX(j1939_socks_lock);
+static DEFINE_SPINLOCK(j1939_socks_lock);
 
 struct j1939_sock {
 	struct sock sk; /* must be first to skip with memset */
@@ -132,9 +132,7 @@ static inline int packet_match(const struct j1939_sk_buff_cb *cb,
 	return 0;
 }
 
-/*
- * callback per socket, called from filter infrastructure
- */
+/* callback per socket, called from j1939_recv */
 static void j1939sk_recv_skb(struct sk_buff *oskb, void *data)
 {
 	struct sk_buff *skb;
@@ -282,8 +280,6 @@ static int j1939sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 	if (addr->can_family != AF_CAN)
 		return -EINVAL;
 
-	/* lock j1939_socks_lock first, to avoid circular lock dependancy */
-	mutex_lock(&j1939_socks_lock);
 	lock_sock(sock->sk);
 	if (jsk->state & JSK_BOUND) {
 		ret = -EBUSY;
@@ -314,7 +310,6 @@ static int j1939sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 		jsk->addr.pgn = addr->can_addr.j1939.pgn;
 		/* since this socket is bound already, we can skip a lot */
 		release_sock(sock->sk);
-		mutex_unlock(&j1939_socks_lock);
 		return 0;
 	}
 
@@ -376,7 +371,9 @@ static int j1939sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 	jsk->state |= JSK_BOUND;
 
 	if (!(old_state & (JSK_BOUND | JSK_CONNECTED))) {
+		spin_lock_bh(&j1939_socks_lock);
 		list_add_tail(&jsk->list, &j1939_socks);
+		spin_unlock_bh(&j1939_socks_lock);
 		j1939_recv_add(jsk, j1939sk_recv_skb);
 	}
 
@@ -384,7 +381,6 @@ static int j1939sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 
 fail_locked:
 	release_sock(sock->sk);
-	mutex_unlock(&j1939_socks_lock);
 	return ret;
 }
 
@@ -405,7 +401,6 @@ static int j1939sk_connect(struct socket *sock, struct sockaddr *uaddr,
 	if (addr->can_family != AF_CAN)
 		return -EINVAL;
 
-	mutex_lock(&j1939_socks_lock);
 	lock_sock(sock->sk);
 	if (jsk->state & JSK_CONNECTED) {
 		ret = -EISCONN;
@@ -470,16 +465,15 @@ static int j1939sk_connect(struct socket *sock, struct sockaddr *uaddr,
 	jsk->state |= JSK_CONNECTED;
 
 	if (!(old_state & (JSK_BOUND | JSK_CONNECTED))) {
+		spin_lock_bh(&j1939_socks_lock);
 		list_add_tail(&jsk->list, &j1939_socks);
+		spin_unlock_bh(&j1939_socks_lock);
 		j1939_recv_add(jsk, j1939sk_recv_skb);
 	}
-	release_sock(sock->sk);
-	mutex_unlock(&j1939_socks_lock);
-	return 0;
+	ret = 0;
 
 fail_locked:
 	release_sock(sock->sk);
-	mutex_unlock(&j1939_socks_lock);
 	return ret;
 }
 
@@ -524,13 +518,13 @@ static int j1939sk_release(struct socket *sock)
 
 	if (!sk)
 		return 0;
+	lock_sock(sk);
 	jsk = j1939_sk(sk);
 	j1939_recv_remove(jsk, j1939sk_recv_skb);
-	mutex_lock(&j1939_socks_lock);
+	spin_lock_bh(&j1939_socks_lock);
 	list_del_init(&jsk->list);
-	mutex_unlock(&j1939_socks_lock);
+	spin_unlock_bh(&j1939_socks_lock);
 
-	lock_sock(sk);
 	if (jsk->state & PROMISC)
 		j1939_put_promisc_receiver(jsk->sk.sk_bound_dev_if);
 
@@ -860,7 +854,7 @@ void j1939sk_netdev_event(int ifindex, int error_code)
 {
 	struct j1939_sock *jsk;
 
-	mutex_lock(&j1939_socks_lock);
+	spin_lock_bh(&j1939_socks_lock);
 	list_for_each_entry(jsk, &j1939_socks, list) {
 		if (jsk->sk.sk_bound_dev_if != ifindex)
 			continue;
@@ -869,7 +863,7 @@ void j1939sk_netdev_event(int ifindex, int error_code)
 			jsk->sk.sk_error_report(&jsk->sk);
 		/* do not remove filters here */
 	}
-	mutex_unlock(&j1939_socks_lock);
+	spin_lock_bh(&j1939_socks_lock);
 }
 
 static const struct proto_ops j1939_ops = {
