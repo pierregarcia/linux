@@ -6,7 +6,7 @@ can-j1939-objs := main.o \
 	rtnl.o \
 	socket.o \
 	address-claim.o transport.o \
-	promisc.o filter.o
+	promisc.o
 
 ifeq ($(CONFIG_CAN_J1939_DEBUG),y)
 	EXTRA_CFLAGS += -DDEBUG

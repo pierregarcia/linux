@@ -287,10 +287,6 @@ extern void j1939_priv_ac_task(unsigned long val);
 extern void j1939sk_netdev_event(int ifindex, int error_code);
 extern int j1939tp_rmdev_notifier(struct net_device *netdev);
 
-/* add/remove receiver */
-extern int j1939_recv_add(void *vp, void (*fn)(struct sk_buff *, void *));
-extern int j1939_recv_remove(void *vp, void (*fn)(struct sk_buff *, void *));
-
 /*
  * provide public access to this lock
  * so sparse can verify the context balance

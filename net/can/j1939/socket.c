@@ -133,12 +133,13 @@ static inline int packet_match(const struct j1939_sk_buff_cb *cb,
 }
 
 /* callback per socket, called from j1939_recv */
-static void j1939sk_recv_skb(struct sk_buff *oskb, void *data)
+static void j1939sk_recv_skb(struct sk_buff *oskb, struct j1939_sock *jsk)
 {
 	struct sk_buff *skb;
-	struct j1939_sock *jsk = (struct j1939_sock *)data;
 	struct j1939_sk_buff_cb *cb = (void *)oskb->cb;
 
+	if (!(jsk->state & (JSK_BOUND | JSK_CONNECTED)))
+		return;
 	if (jsk->sk.sk_bound_dev_if && (jsk->sk.sk_bound_dev_if != cb->ifindex))
 		/* this socket does not take packets from this iface */
 		return;
@@ -191,6 +192,22 @@ static void j1939sk_recv_skb(struct sk_buff *oskb, void *data)
 	if (sock_queue_rcv_skb(&jsk->sk, skb) < 0)
 		kfree_skb(skb);
 }
+
+int j1939_recv(struct sk_buff *skb)
+{
+	struct filter *filter;
+
+	struct j1939_sock *jsk;
+
+	spin_lock_bh(&j1939_socks_lock);
+	list_for_each_entry(jsk, &j1939_socks, list) {
+		j1939sk_recv_skb(skb, jsk);
+	}
+	spin_unlock_bh(&j1939_socks_lock);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(j1939_recv);
 
 static int j1939sk_init(struct sock *sk)
 {
@@ -374,7 +391,6 @@ static int j1939sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 		spin_lock_bh(&j1939_socks_lock);
 		list_add_tail(&jsk->list, &j1939_socks);
 		spin_unlock_bh(&j1939_socks_lock);
-		j1939_recv_add(jsk, j1939sk_recv_skb);
 	}
 
 	ret = 0;
@@ -468,7 +484,6 @@ static int j1939sk_connect(struct socket *sock, struct sockaddr *uaddr,
 		spin_lock_bh(&j1939_socks_lock);
 		list_add_tail(&jsk->list, &j1939_socks);
 		spin_unlock_bh(&j1939_socks_lock);
-		j1939_recv_add(jsk, j1939sk_recv_skb);
 	}
 	ret = 0;
 
