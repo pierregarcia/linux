@@ -728,7 +728,9 @@ static void j1939xtp_rx_rts(struct sk_buff *skb, int extd)
 		int abort = 0;
 		if (extd) {
 			len = j1939etp_ctl_to_size(dat);
-			if (len > (max_packet_size ?: MAX_ETP_PACKET_SIZE))
+			if (len > MAX_ETP_PACKET_SIZE)
+				abort = ABORT_FAULT;
+			else if (max_packet_size && (len > max_packet_size))
 				abort = ABORT_RESOURCE;
 			else if (len <= MAX_TP_PACKET_SIZE)
 				abort = ABORT_FAULT;
@@ -954,12 +956,7 @@ static int j1939tp_txnext(struct session *session)
 tx_cts:
 		ret = 0;
 		len = session->pkt.total - session->pkt.done;
-		if (len > 255)
-			len = 255;
-		if (len > session->pkt.block)
-			len = session->pkt.block;
-		if (block && (len > block))
-			len = block;
+		len = min(max(len, session->pkt.block), block ?: 255);
 
 		if (session->extd) {
 			pkt = session->pkt.done+1;
@@ -1084,7 +1081,7 @@ static void j1939tp_txtask(unsigned long val)
 	get_session(session);
 	ret = j1939tp_txnext(session);
 	if (ret < 0)
-		j1939tp_schedule_txtimer(session, retry_ms);
+		j1939tp_schedule_txtimer(session, retry_ms ?: 20);
 	put_session(session);
 }
 
@@ -1130,7 +1127,8 @@ int j1939_send_transport(struct sk_buff *skb)
 		return -EDOM;
 	if (skb->len <= 8)
 		return 0;
-	else if (skb->len > (max_packet_size ?: MAX_ETP_PACKET_SIZE))
+	else if ((skb->len > MAX_ETP_PACKET_SIZE) ||
+			(max_packet_size && (skb->len > max_packet_size)))
 		return -EMSGSIZE;
 
 	if (skb->len > MAX_TP_PACKET_SIZE) {
@@ -1147,7 +1145,7 @@ int j1939_send_transport(struct sk_buff *skb)
 	session->transmission = 1;
 	session->pkt.total = (skb->len + 6)/7;
 	session->pkt.block = session->extd ? 255 :
-		(block ?: session->pkt.total);
+		min(block ?: 255, session->pkt.total);
 	if (j1939cb_is_broadcast(session->cb))
 		/* set the end-packet for broadcast */
 		session->pkt.last = session->pkt.total;
