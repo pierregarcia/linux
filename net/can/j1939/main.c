@@ -42,6 +42,12 @@ struct proc_dir_entry *j1939_procdir;
 #define CAN_FTR	(sizeof(struct can_frame)-CAN_HDR-\
 		sizeof(((struct can_frame *)0)->data))
 
+static unsigned int padding = 0;
+
+module_param_named(padding, padding, uint, 0644);
+
+MODULE_PARM_DESC(padding, "Pad all packets to 8 bytes, and stuff with 0xff");
+
 static void j1939_recv_ecu_flags(struct sk_buff *skb, void *data)
 {
 	struct j1939_priv *priv = data;
@@ -163,7 +169,11 @@ static int j1939_send_can(struct sk_buff *skb)
 		canid |= ((sk_addr->pgn & 0x3ffff) << 8);
 
 	msg->can_id = canid;
-	msg->can_dlc = dlc;
+	if (padding) {
+		memset(msg->data + dlc, 0xff, 8 - dlc);
+		msg->can_dlc = 8;
+	} else
+		msg->can_dlc = dlc;
 
 	/* set net_device */
 	ret = -ENODEV;
