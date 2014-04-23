@@ -58,7 +58,7 @@ module_param_named(transport_packet_delay, packet_delay, uint, 0644);
 
 MODULE_PARM_DESC(transport_burst_count, "Number of packets to send in burst between flow control (1..255, default 255)");
 MODULE_PARM_DESC(transport_max_size, "Maximum packet size (default 100k)");
-MODULE_PARM_DESC(transport_retry_time, "CAN frame retransmission timeout in msecs. This is only used during transport sessions. (default 20)");
+MODULE_PARM_DESC(transport_retry_time, "Packet retransmission timeout in msecs, used in case of buffer full. (default 20)");
 MODULE_PARM_DESC(transport_packet_delay, "Delay between packets to avoid buffer overruns (default 0)");
 
 struct session {
