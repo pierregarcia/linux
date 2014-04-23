@@ -220,6 +220,7 @@ static int j1939sk_init(struct sock *sk)
 	jsk->sk.sk_reuse = 1; /* per default */
 	jsk->addr.sa = J1939_NO_ADDR;
 	jsk->addr.da = J1939_NO_ADDR;
+	jsk->addr.pgn = J1939_NO_PGN;
 	return 0;
 }
 
@@ -324,7 +325,8 @@ static int j1939sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 			goto fail_locked;
 		}
 		/* set default transmit pgn */
-		jsk->addr.pgn = addr->can_addr.j1939.pgn;
+		if (pgn_is_valid(addr->can_addr.j1939.pgn)
+			jsk->addr.pgn = addr->can_addr.j1939.pgn;
 		/* since this socket is bound already, we can skip a lot */
 		release_sock(sock->sk);
 		return 0;
@@ -382,7 +384,8 @@ static int j1939sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 	}
 
 	/* set default transmit pgn */
-	jsk->addr.pgn = addr->can_addr.j1939.pgn;
+	if (pgn_is_valid(addr->can_addr.j1939.pgn)
+		jsk->addr.pgn = addr->can_addr.j1939.pgn;
 
 	old_state = jsk->state;
 	jsk->state |= JSK_BOUND;
@@ -832,6 +835,10 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 		}
 		if (pgn_is_valid(addr->can_addr.j1939.pgn))
 			skb_cb->pgn = addr->can_addr.j1939.pgn;
+	}
+	if (!pgn_is_valid(addr->can_addr.j1939.pgn)) {
+		ret = -EINVAL;
+		goto free_skb;
 	}
 
 	if (skb_cb->msg_flags & J1939_MSG_SYNC) {
