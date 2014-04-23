@@ -49,14 +49,17 @@
 static unsigned int block = 255;
 static unsigned int max_packet_size = 1024*100;
 static unsigned int retry_ms = 20;
+static unsigned int packet_delay = 0;
 
 module_param_named(transport_burst_count, block, uint, 0644);
 module_param_named(transport_max_size, max_packet_size, uint, 0644);
 module_param_named(transport_retry_time, retry_ms, uint, 0644);
+module_param_named(transport_packet_delay, packet_delay, uint, 0644);
 
 MODULE_PARM_DESC(transport_burst_count, "Number of packets to send in burst between flow control (1..255, default 255)");
 MODULE_PARM_DESC(transport_max_size, "Maximum packet size (default 100k)");
 MODULE_PARM_DESC(transport_retry_time, "CAN frame retransmission timeout in msecs. This is only used during transport sessions. (default 20)");
+MODULE_PARM_DESC(transport_packet_delay, "Delay between packets to avoid buffer overruns (default 0)");
 
 struct session {
 	struct list_head list;
@@ -919,7 +922,7 @@ static int j1939tp_txnext(struct session *session)
 	uint8_t dat[8];
 	const uint8_t *tpdat;
 	int ret, offset, pkt_done, pkt_end;
-	unsigned int pkt, len;
+	unsigned int pkt, len, pdelay;
 
 	memset(dat, 0xff, sizeof(dat));
 	get_session(session); /* do not loose it */
@@ -1062,9 +1065,10 @@ tx_cts:
 			session->last_txcmd = 0xff;
 			++pkt_done;
 			++session->pkt.tx;
-			if (j1939cb_is_broadcast(session->cb)) {
-				if (session->pkt.tx < session->pkt.total)
-					j1939tp_schedule_txtimer(session, 50);
+			pdelay = j1939cb_is_broadcast(session->cb) ?  50 :
+				packet_delay;
+			if ((session->pkt.tx < session->pkt.total) && pdelay) {
+				j1939tp_schedule_txtimer(session, pdelay);
 				break;
 			}
 		}
