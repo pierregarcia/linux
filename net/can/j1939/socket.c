@@ -195,8 +195,6 @@ static void j1939sk_recv_skb(struct sk_buff *oskb, struct j1939_sock *jsk)
 
 int j1939_recv(struct sk_buff *skb)
 {
-	struct filter *filter;
-
 	struct j1939_sock *jsk;
 
 	spin_lock_bh(&j1939_socks_lock);
@@ -538,7 +536,6 @@ static int j1939sk_release(struct socket *sock)
 		return 0;
 	lock_sock(sk);
 	jsk = j1939_sk(sk);
-	j1939_recv_remove(jsk, j1939sk_recv_skb);
 	spin_lock_bh(&j1939_socks_lock);
 	list_del_init(&jsk->list);
 	spin_unlock_bh(&j1939_socks_lock);
@@ -602,11 +599,11 @@ static int j1939sk_setsockopt(struct socket *sock, int level, int optname,
 			count = 0;
 		}
 
-		j1939_recv_suspend();
+		spin_lock_bh(&j1939_socks_lock);
 		ofilters = jsk->filters;
 		jsk->filters = filters;
 		jsk->nfilters = count;
-		j1939_recv_resume();
+		spin_unlock_bh(&j1939_socks_lock);
 		if (ofilters)
 			kfree(ofilters);
 		break;
