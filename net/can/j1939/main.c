@@ -449,7 +449,8 @@ fail_tp:
 	can_proto_unregister(&j1939_can_proto);
 fail_sk:
 	unregister_netdevice_notifier(&j1939_netdev_notifier);
-	proc_net_remove(&init_net, j1939_procname);
+	proc_remove(j1939_procdir);
+	j1939_procdir = NULL;
 	return ret;
 }
 
@@ -471,7 +472,8 @@ static __exit void j1939_module_exit(void)
 
 	unregister_netdevice_notifier(&j1939_netdev_notifier);
 
-	proc_net_remove(&init_net, j1939_procname);
+	proc_remove(j1939_procdir);
+	j1939_procdir = NULL;
 }
 
 module_init(j1939_module_init);

@@ -1360,7 +1360,7 @@ static int j1939tp_proc_show(struct seq_file *sqf, void *v)
 
 static int j1939tp_proc_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, j1939tp_proc_show, PDE(inode));
+	return single_open(file, j1939tp_proc_show, NULL);
 }
 
 static const struct file_operations j1939tp_proc_ops = {
