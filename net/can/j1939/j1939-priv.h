@@ -321,8 +321,8 @@ extern const struct can_proto j1939_can_proto;
 
 /* rtnetlink */
 extern const struct rtnl_af_ops j1939_rtnl_af_ops;
-extern int j1939rtnl_new_addr(struct sk_buff *, struct nlmsghdr *, void *arg);
-extern int j1939rtnl_del_addr(struct sk_buff *, struct nlmsghdr *, void *arg);
+extern int j1939rtnl_new_addr(struct sk_buff *, struct nlmsghdr *);
+extern int j1939rtnl_del_addr(struct sk_buff *, struct nlmsghdr *);
 extern int j1939rtnl_dump_addr(struct sk_buff *, struct netlink_callback *);
 
 #endif /* _J1939_PRIV_H_ */

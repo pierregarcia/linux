@@ -873,7 +873,7 @@ static struct notifier_block can_netdev_notifier __read_mostly = {
 /*
  * RTNETLINK
  */
-static int can_rtnl_doit(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
+static int can_rtnl_doit(struct sk_buff *skb, struct nlmsghdr *nlh)
 {
 	int ret, protocol;
 	const struct can_proto *cp;
@@ -897,7 +897,7 @@ static int can_rtnl_doit(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
 		break;
 	}
 	if (fn)
-		ret = fn(skb, nlh, arg);
+		ret = fn(skb, nlh);
 	else
 		ret = -EPROTONOSUPPORT;
 	can_put_proto(cp);
