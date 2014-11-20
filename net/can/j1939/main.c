@@ -87,7 +87,7 @@ static void j1939_can_recv(struct sk_buff *skb, void *data)
 {
 	int orig_len;
 	struct j1939_sk_buff_cb *sk_addr;
-	struct can_frame *msg;
+	struct can_frame *cf;
 	uint8_t saved_cb[sizeof(skb->cb)];
 
 	BUILD_BUG_ON(sizeof(*sk_addr) > sizeof(skb->cb));
@@ -96,11 +96,11 @@ static void j1939_can_recv(struct sk_buff *skb, void *data)
 	 * the skb payload (pointer) is moved, so that the next skb_data
 	 * returns the actual payload
 	 */
-	msg = (void *)skb->data;
+	cf = (void *)skb->data;
 	orig_len = skb->len;
 	skb_pull(skb, CAN_HDR);
 	/* fix length, set to dlc, with 8 maximum */
-	skb_trim(skb, min_t(uint8_t, msg->can_dlc, 8));
+	skb_trim(skb, min_t(uint8_t, cf->can_dlc, 8));
 
 	/* set addr */
 	sk_addr = (struct j1939_sk_buff_cb *)skb->cb;
@@ -108,9 +108,9 @@ static void j1939_can_recv(struct sk_buff *skb, void *data)
 	memset(sk_addr, 0, sizeof(*sk_addr));
 	if (skb->dev)
 		sk_addr->ifindex = skb->dev->ifindex;
-	sk_addr->priority = (msg->can_id & 0x1c000000) >> 26;
-	sk_addr->src.addr = msg->can_id & 0xff;
-	sk_addr->pgn = (msg->can_id & 0x3ffff00) >> 8;
+	sk_addr->priority = (cf->can_id & 0x1c000000) >> 26;
+	sk_addr->src.addr = cf->can_id & 0xff;
+	sk_addr->pgn = (cf->can_id & 0x3ffff00) >> 8;
 	if (pgn_is_pdu1(sk_addr->pgn)) {
 		/* Type 1: with destination address */
 		sk_addr->dst.addr = sk_addr->pgn & 0xff;
@@ -144,7 +144,7 @@ int j1939_send_can(struct sk_buff *skb)
 	canid_t canid;
 	struct j1939_sk_buff_cb *sk_addr;
 	struct net_device *netdev = NULL;
-	struct can_frame *msg;
+	struct can_frame *cf;
 
 	ret = j1939_fixup_address_claim(skb);
 	if (unlikely(ret))
@@ -157,8 +157,8 @@ int j1939_send_can(struct sk_buff *skb)
 	if (ret < 0)
 		return ret;
 
-	msg = (void *)skb_push(skb, CAN_HDR);
-	BUG_ON(!msg);
+	cf = (void *)skb_push(skb, CAN_HDR);
+	BUG_ON(!cf);
 	/* make it a full can frame */
 	skb_put(skb, CAN_FTR + (8 - dlc));
 
@@ -172,12 +172,12 @@ int j1939_send_can(struct sk_buff *skb)
 	else
 		canid |= ((sk_addr->pgn & 0x3ffff) << 8);
 
-	msg->can_id = canid;
+	cf->can_id = canid;
 	if (padding) {
-		memset(msg->data + dlc, 0xff, 8 - dlc);
-		msg->can_dlc = 8;
+		memset(cf->data + dlc, 0xff, 8 - dlc);
+		cf->can_dlc = 8;
 	} else
-		msg->can_dlc = dlc;
+		cf->can_dlc = dlc;
 
 	/* set net_device */
 	ret = -ENODEV;
