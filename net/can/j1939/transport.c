@@ -371,7 +371,7 @@ static int j1939tp_tx_dat(struct session *related,
 
 	skdat = skb_put(skb, len);
 	memcpy(skdat, dat, len);
-	ret = j1939_send_normalized_pkt(skb);
+	ret = j1939_send_can(skb);
 	if (ret < 0)
 		kfree_skb(skb);
 	return ret;
@@ -412,7 +412,7 @@ static int j1939xtp_do_tx_ctl(struct sk_buff *related, int extd,
 	skdat[6] = (pgn >>  8) & 0xff;
 	skdat[5] = (pgn >>  0) & 0xff;
 
-	ret = j1939_send_normalized_pkt(skb);
+	ret = j1939_send_can(skb);
 	if (ret)
 		kfree_skb(skb);
 	return ret;
@@ -1137,8 +1137,6 @@ int j1939_send_transport(struct sk_buff *skb)
 	    (etp_pgn_dat == cb->pgn) || (etp_pgn_ctl == cb->pgn))
 		/* avoid conflict */
 		return -EDOM;
-	if (skb->len <= 8)
-		return 0;
 	else if ((skb->len > MAX_ETP_PACKET_SIZE) ||
 			(max_packet_size && (skb->len > max_packet_size)))
 		return -EMSGSIZE;
@@ -1174,7 +1172,7 @@ int j1939_send_transport(struct sk_buff *skb)
 	ret = j1939tp_tx_initial(session);
 	if (!ret)
 		/* transmission started */
-		return RESULT_STOP;
+		return ret;
 	sessionlist_lock();
 	list_del_init(&session->list);
 	sessionlist_unlock();
@@ -1253,9 +1251,9 @@ int j1939_recv_transport(struct sk_buff *skb)
 		}
 		break;
 	default:
-		return 0;
+		return 0; /* no problem */
 	}
-	return RESULT_STOP;
+	return 1; /* "I processed the message" */
 }
 
 static struct session *j1939session_fresh_new(int size,

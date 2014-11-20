@@ -127,6 +127,7 @@ static void j1939_can_recv(struct sk_buff *skb, void *data)
 	if (j1939_recv_promisc(skb))
 		goto done;
 	if (j1939_recv_transport(skb))
+		/* this means the transport layer processed the message */
 		goto done;
 	j1939_recv(skb);
 done:
@@ -137,7 +138,7 @@ done:
 	memcpy(sk_addr, saved_cb, sizeof(saved_cb));
 }
 
-static int j1939_send_can(struct sk_buff *skb)
+int j1939_send_can(struct sk_buff *skb)
 {
 	int ret, dlc;
 	canid_t canid;
@@ -145,6 +146,9 @@ static int j1939_send_can(struct sk_buff *skb)
 	struct net_device *netdev = NULL;
 	struct can_frame *msg;
 
+	ret = j1939_fixup_address_claim(skb);
+	if (unlikely(ret))
+		return ret;
 	dlc = skb->len;
 	if (dlc > 8)
 		return -EMSGSIZE;
@@ -189,12 +193,9 @@ static int j1939_send_can(struct sk_buff *skb)
 	/* fix the 'always free' policy of can_send */
 	skb = skb_get(skb);
 	ret = can_send(skb, 1);
-	if (!ret) {
+	if (!ret)
 		/* free when can_send succeeded */
 		kfree_skb(skb);
-		/* is this necessary ? */
-		ret = RESULT_STOP;
-	}
 failed:
 	if (netdev)
 		dev_put(netdev);
@@ -269,35 +270,17 @@ int j1939_send(struct sk_buff *skb)
 		cb->dst.flags = 0;
 	}
 
-	ret = j1939_send_transport(skb);
-	if (unlikely(ret))
-		goto done;
-	ret = j1939_send_address_claim(skb);
-	if (unlikely(ret))
-		goto done;
-	ret = j1939_send_can(skb);
+	if (skb->len > 8)
+		ret = j1939_send_transport(skb);
+	else
+		ret = j1939_send_can(skb);
 done:
-	/* don't mark as failed, it can't be better */
-	if (ret == RESULT_STOP)
-		ret = 0;
 	read_unlock_bh(&priv->lock);
 	sock_put(skb->sk);
 	put_j1939_priv(priv);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(j1939_send);
-
-/* send a packet of max 8 bytes, without testing metadata */
-int j1939_send_normalized_pkt(struct sk_buff *skb)
-{
-	int ret;
-
-	ret = j1939_send_address_claim(skb);
-	if (unlikely(ret))
-		return ret;
-	return j1939_send_can(skb);
-}
-
 
 /* NETDEV MANAGEMENT */
 

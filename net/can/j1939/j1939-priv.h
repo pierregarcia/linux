@@ -216,28 +216,15 @@ static inline int j1939cb_is_broadcast(const struct j1939_sk_buff_cb *cb)
 	return (!cb->dst.name && (cb->dst.addr >= 0xff));
 }
 
-/* J1939 stack */
-enum {
-	j1939_level_can,
-	j1939_level_transport,
-	j1939_level_sky,
-};
-
-#define RESULT_STOP	1
-/*
- * return RESULT_STOP when stack processing may stop.
- * it is up to the stack entry itself to kfree_skb() the sk_buff
- */
-
-extern int j1939_send_normalized_pkt(struct sk_buff *);
 extern int j1939_send(struct sk_buff *);
 extern int j1939_recv(struct sk_buff *);
 
 /* stack entries */
+extern int j1939_send_can(struct sk_buff *);
 extern int j1939_recv_promisc(struct sk_buff *);
 extern int j1939_send_transport(struct sk_buff *);
 extern int j1939_recv_transport(struct sk_buff *);
-extern int j1939_send_address_claim(struct sk_buff *);
+extern int j1939_fixup_address_claim(struct sk_buff *);
 extern int j1939_recv_address_claim(struct sk_buff *);
 
 extern int j1939_recv_distribute(struct sk_buff *);

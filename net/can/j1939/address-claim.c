@@ -69,7 +69,7 @@ static int j1939_verify_outgoing_address_claim(struct sk_buff *skb)
 	return 0;
 }
 
-int j1939_send_address_claim(struct sk_buff *skb)
+int j1939_fixup_address_claim(struct sk_buff *skb)
 {
 	int ret, sa;
 	struct j1939_sk_buff_cb *sk_addr = (void *)skb->cb;
