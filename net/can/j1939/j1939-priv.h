@@ -258,12 +258,10 @@ static inline struct j1939_priv *dev_j1939_priv(struct net_device *dev)
 	if (dev->type != ARPHRD_CAN)
 		return NULL;
 
-	spin_lock(&can_rcvlists_lock);
 	can_ml_priv = dev->ml_priv;
 	priv = can_ml_priv ? can_ml_priv->j1939_priv : NULL;
 	if (priv)
 		get_j1939_priv(priv);
-	spin_unlock(&can_rcvlists_lock);
 	return priv;
 }
 

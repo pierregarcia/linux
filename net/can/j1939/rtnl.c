@@ -184,7 +184,8 @@ int j1939rtnl_dump_addr(struct sk_buff *skb, struct netlink_callback *cb)
 		return 0;
 
 	ndev = 0;
-	for_each_netdev(&init_net, netdev) {
+	rcu_read_lock();
+	for_each_netdev_rcu(&init_net, netdev) {
 		++ndev;
 		if (ndev < cb->args[1])
 			continue;
@@ -235,6 +236,7 @@ int j1939rtnl_dump_addr(struct sk_buff *skb, struct netlink_callback *cb)
 	}
 	++ndev;
 done:
+	rcu_read_unlock();
 	cb->args[1] = ndev;
 
 	return skb->len;
@@ -269,10 +271,8 @@ static int j1939_fill_link_af(struct sk_buff *skb, const struct net_device *dev)
 	if (dev->type != ARPHRD_CAN)
 		return -ENODEV;
 
-	spin_lock(&can_rcvlists_lock);
 	can_ml_priv = dev->ml_priv;
 	priv = can_ml_priv->j1939_priv;
-	spin_unlock(&can_rcvlists_lock);
 	if (nla_put_u8(skb, IFLA_J1939_ENABLE, priv ? 1 : 0) < 0)
 		return -EMSGSIZE;
 	return 0;

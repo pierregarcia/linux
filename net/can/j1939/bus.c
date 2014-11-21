@@ -302,7 +302,8 @@ struct j1939_ecu *j1939_ecu_find_by_name(name_t name, int ifindex)
 	}
 
 	/* iterate netdevices */
-	for_each_netdev(&init_net, netdev) {
+	rcu_read_lock();
+	for_each_netdev_rcu(&init_net, netdev) {
 		priv = dev_j1939_priv(netdev);
 		if (!priv)
 			continue;
@@ -311,6 +312,7 @@ struct j1939_ecu *j1939_ecu_find_by_name(name_t name, int ifindex)
 		if (ecu)
 			goto found;
 	}
+	rcu_read_unlock();
 	ecu = NULL;
 found:
 	return ecu;
