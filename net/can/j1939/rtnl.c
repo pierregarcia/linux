@@ -291,7 +291,7 @@ static int j1939_set_link_af(struct net_device *dev, const struct nlattr *nla)
 		if (nla_get_u8(tb[IFLA_J1939_ENABLE]))
 			ret = netdev_enable_j1939(dev);
 		else
-			ret = netdev_enable_j1939(dev);
+			ret = netdev_disable_j1939(dev);
 		if (ret < 0)
 			return ret;
 	}
