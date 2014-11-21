@@ -32,8 +32,8 @@ int j1939_recv_promisc(struct sk_buff *skb)
 {
 	struct j1939_sk_buff_cb *cb = (void *)skb->cb;
 
-	if ((cb->src.flags & ECUFLAG_REMOTE) &&
-		(cb->dst.flags & ECUFLAG_REMOTE)) {
+	if ((cb->srcflags & ECUFLAG_REMOTE) &&
+		(cb->dstflags & ECUFLAG_REMOTE)) {
 		if (!atomic_read(&n_promisc))
 			/* stop receive path */
 			return -1;

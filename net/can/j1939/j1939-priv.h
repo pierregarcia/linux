@@ -197,23 +197,23 @@ struct sk_buff;
 
 /* control buffer of the sk_buff */
 struct j1939_sk_buff_cb {
-	int ifindex;
-	priority_t priority;
-	struct {
-		name_t name;
-		uint8_t addr;
-		int flags;
-	} src, dst;
 	pgn_t pgn;
-	int msg_flags;
+	priority_t priority;
+	uint8_t srcaddr;
+	uint8_t dstaddr;
+	name_t srcname;
+	name_t dstname;
+	int srcflags, dstflags;
+
 	/* for tx, MSG_SYN will be used to sync on sockets */
+	int msg_flags;
 };
 #define J1939_MSG_RESERVED	MSG_SYN
 #define J1939_MSG_SYNC		MSG_SYN
 
 static inline int j1939cb_is_broadcast(const struct j1939_sk_buff_cb *cb)
 {
-	return (!cb->dst.name && (cb->dst.addr >= 0xff));
+	return (!cb->dstname && (cb->dstaddr >= 0xff));
 }
 
 extern int j1939_send(struct sk_buff *);

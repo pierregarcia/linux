@@ -123,9 +123,9 @@ static inline int packet_match(const struct j1939_sk_buff_cb *cb,
 	for (; nfilter; ++f, --nfilter) {
 		if ((cb->pgn & f->pgn_mask) != (f->pgn & f->pgn_mask))
 			continue;
-		if ((cb->src.addr & f->addr_mask) != (f->addr & f->addr_mask))
+		if ((cb->srcaddr & f->addr_mask) != (f->addr & f->addr_mask))
 			continue;
-		if ((cb->src.name & f->name_mask) != (f->name & f->name_mask))
+		if ((cb->srcname & f->name_mask) != (f->name & f->name_mask))
 			continue;
 		return 1;
 	}
@@ -140,27 +140,29 @@ static void j1939sk_recv_skb(struct sk_buff *oskb, struct j1939_sock *jsk)
 
 	if (!(jsk->state & (JSK_BOUND | JSK_CONNECTED)))
 		return;
-	if (jsk->sk.sk_bound_dev_if && (jsk->sk.sk_bound_dev_if != cb->ifindex))
+	if (jsk->sk.sk_bound_dev_if &&
+			(jsk->sk.sk_bound_dev_if != oskb->skb_iif))
 		/* this socket does not take packets from this iface */
 		return;
 	if (!(jsk->state & PROMISC)) {
-		if (cb->dst.flags & ECUFLAG_REMOTE)
+		if (cb->dstflags & ECUFLAG_REMOTE)
 			/*
 			 * this msg was destined for an ECU associated
 			 * with this socket
 			 */
 			return;
+
 		if (jsk->addr.src) {
-			if (cb->dst.name &&
-				(cb->dst.name != jsk->addr.src))
+			if (cb->dstname &&
+				(cb->dstname != jsk->addr.src))
 				/*
 				 * the msg is not destined for the name
 				 * that the socket is bound to
 				 */
 				return;
 		} else if (j1939_address_is_unicast(jsk->addr.sa)) {
-			if (j1939_address_is_unicast(cb->dst.addr) &&
-				(cb->dst.addr != jsk->addr.sa))
+			if (j1939_address_is_unicast(cb->dstaddr) &&
+				(cb->dstaddr != jsk->addr.sa))
 				/*
 				 * the msg is not destined for the name
 				 * that the socket is bound to
@@ -715,13 +717,13 @@ static int j1939sk_recvmsg(struct kiocb *iocb, struct socket *sock,
 	sock_recv_timestamp(msg, sk, skb);
 	sk_addr = (void *)skb->cb;
 
-	if (j1939_address_is_valid(sk_addr->dst.addr))
+	if (j1939_address_is_valid(sk_addr->dstaddr))
 		put_cmsg(msg, SOL_CAN_J1939, SCM_J1939_DEST_ADDR,
-				sizeof(sk_addr->dst.addr), &sk_addr->dst.addr);
+				sizeof(sk_addr->dstaddr), &sk_addr->dstaddr);
 
-	if (sk_addr->dst.name)
+	if (sk_addr->dstname)
 		put_cmsg(msg, SOL_CAN_J1939, SCM_J1939_DEST_NAME,
-				sizeof(sk_addr->dst.name), &sk_addr->dst.name);
+				sizeof(sk_addr->dstname), &sk_addr->dstname);
 
 	put_cmsg(msg, SOL_CAN_J1939, SCM_J1939_PRIO,
 			sizeof(sk_addr->priority), &sk_addr->priority);
@@ -732,9 +734,9 @@ static int j1939sk_recvmsg(struct kiocb *iocb, struct socket *sock,
 		msg->msg_namelen = required_size(can_addr.j1939, *paddr);
 		memset(msg->msg_name, 0, msg->msg_namelen);
 		paddr->can_family = AF_CAN;
-		paddr->can_ifindex = sk_addr->ifindex;
-		paddr->can_addr.j1939.name = sk_addr->src.name;
-		paddr->can_addr.j1939.addr = sk_addr->src.addr;
+		paddr->can_ifindex = skb->skb_iif;
+		paddr->can_addr.j1939.name = sk_addr->srcname;
+		paddr->can_addr.j1939.addr = sk_addr->srcaddr;
 		paddr->can_addr.j1939.pgn = sk_addr->pgn;
 	}
 
@@ -814,21 +816,20 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 	skb_cb = (void *) skb->cb;
 	memset(skb_cb, 0, sizeof(*skb_cb));
 	skb_cb->msg_flags = msg->msg_flags;
-	skb_cb->ifindex = ifindex;
-	skb_cb->src.name = jsk->addr.src;
-	skb_cb->dst.name = jsk->addr.dst;
+	skb_cb->srcname = jsk->addr.src;
+	skb_cb->dstname = jsk->addr.dst;
 	skb_cb->pgn = jsk->addr.pgn;
 	skb_cb->priority = j1939_prio(jsk->sk.sk_priority);
-	skb_cb->src.addr = jsk->addr.sa;
-	skb_cb->dst.addr = jsk->addr.da;
+	skb_cb->srcaddr = jsk->addr.sa;
+	skb_cb->dstaddr = jsk->addr.da;
 
 	if (msg->msg_name) {
 		struct sockaddr_can *addr = msg->msg_name;
 
 		if (addr->can_addr.j1939.name ||
 				(addr->can_addr.j1939.addr != J1939_NO_ADDR)) {
-			skb_cb->dst.name = addr->can_addr.j1939.name;
-			skb_cb->dst.addr = addr->can_addr.j1939.addr;
+			skb_cb->dstname = addr->can_addr.j1939.name;
+			skb_cb->dstaddr = addr->can_addr.j1939.addr;
 		}
 		if (pgn_is_valid(addr->can_addr.j1939.pgn))
 			skb_cb->pgn = addr->can_addr.j1939.pgn;
