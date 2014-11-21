@@ -879,7 +879,7 @@ void j1939sk_netdev_event(int ifindex, int error_code)
 			jsk->sk.sk_error_report(&jsk->sk);
 		/* do not remove filters here */
 	}
-	spin_lock_bh(&j1939_socks_lock);
+	spin_unlock_bh(&j1939_socks_lock);
 }
 
 static const struct proto_ops j1939_ops = {
