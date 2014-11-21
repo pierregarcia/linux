@@ -101,7 +101,6 @@ void j1939_sock_pending_del(struct sock *sk)
 		wake_up(&jsk->waitq);
 }
 
-
 static inline int j1939_no_address(const struct sock *sk)
 {
 	const struct j1939_sock *jsk = j1939_sk(sk);
