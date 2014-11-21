@@ -143,7 +143,6 @@ int j1939_send_can(struct sk_buff *skb)
 	int ret, dlc;
 	canid_t canid;
 	struct j1939_sk_buff_cb *sk_addr;
-	struct net_device *netdev = NULL;
 	struct can_frame *cf;
 
 	ret = j1939_fixup_address_claim(skb);
@@ -179,26 +178,12 @@ int j1939_send_can(struct sk_buff *skb)
 	} else
 		cf->can_dlc = dlc;
 
-	/* set net_device */
-	ret = -ENODEV;
-	if (!skb->dev) {
-		if (!sk_addr->ifindex)
-			goto failed;
-		netdev = dev_get_by_index(&init_net, sk_addr->ifindex);
-		if (!netdev)
-			goto failed;
-		skb->dev = netdev;
-	}
-
 	/* fix the 'always free' policy of can_send */
 	skb = skb_get(skb);
 	ret = can_send(skb, 1);
 	if (!ret)
 		/* free when can_send succeeded */
-		kfree_skb(skb);
-failed:
-	if (netdev)
-		dev_put(netdev);
+		consume_skb(skb);
 	return ret;
 }
 
@@ -215,9 +200,6 @@ int j1939_send(struct sk_buff *skb)
 		cb->priority = 6;
 
 	/* verify source */
-	if (!skb->dev)
-		return -ENETUNREACH;
-
 	priv = dev_j1939_priv(skb->dev);
 	if (!priv)
 		return -ENETUNREACH;
