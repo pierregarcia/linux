@@ -301,7 +301,6 @@ int netdev_enable_j1939(struct net_device *netdev)
 	tasklet_init(&priv->ac_task, j1939_priv_ac_task, (unsigned long)priv);
 	rwlock_init(&priv->lock);
 	INIT_LIST_HEAD(&priv->ecus);
-	INIT_LIST_HEAD(&priv->flist);
 	priv->ifindex = netdev->ifindex;
 	kref_init(&priv->kref);
 

@@ -73,9 +73,6 @@ struct j1939_priv {
 	rwlock_t lock; /*
 	 * segments need a lock to protect the above list
 	 */
-	struct list_head flist; /*
-	 * list entry for use by interrupt lookup routines
-	 */
 	int ifindex;
 	struct addr_ent {
 		ktime_t rxtime;
