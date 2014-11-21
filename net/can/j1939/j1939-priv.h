@@ -204,6 +204,11 @@ struct j1939_sk_buff_cb {
 
 	/* for tx, MSG_SYN will be used to sync on sockets */
 	int msg_flags;
+	/* j1939 clones incoming skb's.
+	 * insock saves the incoming skb->sk
+	 * to determine local generated packets
+	 */
+	struct sock *insock;
 };
 #define J1939_MSG_RESERVED	MSG_SYN
 #define J1939_MSG_SYNC		MSG_SYN

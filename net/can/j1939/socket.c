@@ -171,7 +171,7 @@ static void j1939sk_recv_skb(struct sk_buff *oskb, struct j1939_sock *jsk)
 		}
 	}
 
-	if ((oskb->sk == &jsk->sk) && !(jsk->state & RECV_OWN))
+	if ((cb->insock == &jsk->sk) && !(jsk->state & RECV_OWN))
 		/* own message */
 		return;
 
@@ -185,12 +185,11 @@ static void j1939sk_recv_skb(struct sk_buff *oskb, struct j1939_sock *jsk)
 	}
 	cb = (void *)skb->cb;
 	cb->msg_flags &= ~(MSG_DONTROUTE | MSG_CONFIRM);
-	if (oskb->sk)
+	if (cb->insock)
 		cb->msg_flags |= MSG_DONTROUTE;
-	if (oskb->sk == &jsk->sk)
+	if (cb->insock == &jsk->sk)
 		cb->msg_flags |= MSG_CONFIRM;
 
-	skb->sk = &jsk->sk;
 	if (sock_queue_rcv_skb(&jsk->sk, skb) < 0)
 		kfree_skb(skb);
 }

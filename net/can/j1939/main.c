@@ -83,31 +83,35 @@ static void j1939_recv_ecu_flags(struct sk_buff *skb, void *data)
 }
 
 /* lowest layer */
-static void j1939_can_recv(struct sk_buff *skb, void *data)
+static void j1939_can_recv(struct sk_buff *iskb, void *data)
 {
-	int orig_len;
+	struct sk_buff *skb;
 	struct j1939_sk_buff_cb *sk_addr;
 	struct can_frame *cf;
-	uint8_t saved_cb[sizeof(skb->cb)];
 
 	BUILD_BUG_ON(sizeof(*sk_addr) > sizeof(skb->cb));
+
+	/* create a copy of the skb
+	 * j1939 only delivers the real data bytes,
+	 * the header goes into sockaddr.
+	 * j1939 may not touch the incoming skb in such way
+	 */
+	skb = skb_clone(iskb, GFP_ATOMIC);
 	/*
 	 * get a pointer to the header of the skb
 	 * the skb payload (pointer) is moved, so that the next skb_data
 	 * returns the actual payload
 	 */
 	cf = (void *)skb->data;
-	orig_len = skb->len;
 	skb_pull(skb, CAN_HDR);
 	/* fix length, set to dlc, with 8 maximum */
 	skb_trim(skb, min_t(uint8_t, cf->can_dlc, 8));
 
 	/* set addr */
 	sk_addr = (struct j1939_sk_buff_cb *)skb->cb;
-	memcpy(saved_cb, sk_addr, sizeof(saved_cb));
 	memset(sk_addr, 0, sizeof(*sk_addr));
-	if (skb->dev)
-		sk_addr->ifindex = skb->dev->ifindex;
+	/* save incoming socket, without assigning the skb to it */
+	sk_addr->insock = iskb->sk;
 	sk_addr->priority = (cf->can_id & 0x1c000000) >> 26;
 	sk_addr->srcaddr = cf->can_id & 0xff;
 	sk_addr->pgn = (cf->can_id & 0x3ffff00) >> 8;
@@ -131,11 +135,7 @@ static void j1939_can_recv(struct sk_buff *skb, void *data)
 		goto done;
 	j1939_recv(skb);
 done:
-	/* restore the original skb, should always work */
-	skb_push(skb, CAN_HDR);
-	/* no safety check, it just restores the skbuf's contents */
-	__skb_trim(skb, orig_len);
-	memcpy(sk_addr, saved_cb, sizeof(saved_cb));
+	kfree_skb(skb);
 }
 
 int j1939_send_can(struct sk_buff *skb)
