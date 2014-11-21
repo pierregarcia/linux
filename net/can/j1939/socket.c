@@ -809,8 +809,6 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 	skb->dev = dev;
 	skb->sk  = sk;
 
-	BUILD_BUG_ON(sizeof(skb->cb) < sizeof(*skb_cb));
-
 	skb_cb = (void *) skb->cb;
 	memset(skb_cb, 0, sizeof(*skb_cb));
 	skb_cb->msg_flags = msg->msg_flags;
