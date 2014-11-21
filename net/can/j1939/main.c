@@ -57,27 +57,27 @@ static void j1939_recv_ecu_flags(struct sk_buff *skb, void *data)
 	if (!priv)
 		return;
 	write_lock_bh(&priv->lock);
-	if (j1939_address_is_unicast(cb->src.addr)) {
-		paddr = &priv->ents[cb->src.addr];
+	if (j1939_address_is_unicast(cb->srcaddr)) {
+		paddr = &priv->ents[cb->srcaddr];
 		paddr->rxtime = ktime_get();
 		if (0x0ee00 == cb->pgn) {
 			/* do not touch many things for Address claims */
 		} else if (paddr->ecu) {
 			paddr->ecu->rxtime = paddr->rxtime;
-			cb->src.flags = paddr->ecu->flags;
+			cb->srcflags = paddr->ecu->flags;
 		} else {
 			if (!paddr->flags)
 				paddr->flags |= ECUFLAG_REMOTE;
-			cb->src.flags = paddr->flags;
+			cb->srcflags = paddr->flags;
 		}
 	}
 
-	if (j1939_address_is_unicast(cb->dst.addr)) {
-		paddr = &priv->ents[cb->dst.addr];
+	if (j1939_address_is_unicast(cb->dstaddr)) {
+		paddr = &priv->ents[cb->dstaddr];
 		if (paddr->ecu)
-			cb->dst.flags = paddr->ecu->flags;
+			cb->dstflags = paddr->ecu->flags;
 		else
-			cb->dst.flags = paddr->flags ?: ECUFLAG_REMOTE;
+			cb->dstflags = paddr->flags ?: ECUFLAG_REMOTE;
 	}
 	write_unlock_bh(&priv->lock);
 }
@@ -109,16 +109,16 @@ static void j1939_can_recv(struct sk_buff *skb, void *data)
 	if (skb->dev)
 		sk_addr->ifindex = skb->dev->ifindex;
 	sk_addr->priority = (cf->can_id & 0x1c000000) >> 26;
-	sk_addr->src.addr = cf->can_id & 0xff;
+	sk_addr->srcaddr = cf->can_id & 0xff;
 	sk_addr->pgn = (cf->can_id & 0x3ffff00) >> 8;
 	if (pgn_is_pdu1(sk_addr->pgn)) {
 		/* Type 1: with destination address */
-		sk_addr->dst.addr = sk_addr->pgn & 0xff;
+		sk_addr->dstaddr = sk_addr->pgn & 0xff;
 		/* normalize pgn: strip dst address */
 		sk_addr->pgn &= 0x3ff00;
 	} else {
 		/* set broadcast address */
-		sk_addr->dst.addr = J1939_NO_ADDR;
+		sk_addr->dstaddr = J1939_NO_ADDR;
 	}
 	j1939_recv_ecu_flags(skb, data);
 
@@ -164,11 +164,11 @@ int j1939_send_can(struct sk_buff *skb)
 
 	sk_addr = (struct j1939_sk_buff_cb *)skb->cb;
 	canid = CAN_EFF_FLAG |
-		(sk_addr->src.addr & 0xff) |
+		(sk_addr->srcaddr & 0xff) |
 		((sk_addr->priority & 0x7) << 26);
 	if (pgn_is_pdu1(sk_addr->pgn))
 		canid |= ((sk_addr->pgn & 0x3ff00) << 8) |
-			((sk_addr->dst.addr & 0xff) << 8);
+			((sk_addr->dstaddr & 0xff) << 8);
 	else
 		canid |= ((sk_addr->pgn & 0x3ffff) << 8);
 
@@ -206,7 +206,6 @@ int j1939_send(struct sk_buff *skb)
 {
 	struct j1939_sk_buff_cb *cb = (void *)skb->cb;
 	struct j1939_priv *priv;
-	struct addr_ent *paddr;
 	struct j1939_ecu *ecu;
 	int ret = 0;
 
@@ -216,10 +215,10 @@ int j1939_send(struct sk_buff *skb)
 		cb->priority = 6;
 
 	/* verify source */
-	if (!cb->ifindex)
+	if (!skb->dev)
 		return -ENETUNREACH;
 
-	priv = j1939_priv_find(cb->ifindex);
+	priv = dev_j1939_priv(skb->dev);
 	if (!priv)
 		return -ENETUNREACH;
 
@@ -227,48 +226,45 @@ int j1939_send(struct sk_buff *skb)
 
 	read_lock_bh(&priv->lock);
 	/* verify source */
-	if (cb->src.name) {
-		ecu = j1939_ecu_find_by_name(cb->src.name, cb->ifindex);
-		cb->src.flags = ecu ? ecu->flags : 0;
-		if (ecu)
+	if (cb->srcname) {
+		ecu = j1939_ecu_find_by_name(cb->srcname, skb->dev->ifindex);
+		if (ecu) {
+			cb->srcflags = ecu->flags;
 			put_j1939_ecu(ecu);
-	} else if (j1939_address_is_unicast(cb->src.addr)) {
-		paddr = &priv->ents[cb->src.addr];
-		cb->src.flags = paddr->flags;
-	} else if (cb->src.addr == J1939_IDLE_ADDR) {
+		}
+	} else if (j1939_address_is_unicast(cb->srcaddr))
+		cb->srcflags = priv->ents[cb->srcaddr].flags;
+	else if (cb->srcaddr == J1939_IDLE_ADDR)
 		/* allow always */
-		cb->src.flags = ECUFLAG_LOCAL;
-	} else {
-		/* J1939_NO_ADDR */
-		cb->src.flags = 0;
-	}
-	if (cb->src.flags & ECUFLAG_REMOTE) {
+		cb->srcflags = ECUFLAG_LOCAL;
+	else
+		cb->srcflags = 0;
+
+	if (cb->srcflags & ECUFLAG_REMOTE) {
 		ret = -EREMOTE;
 		goto done;
-	} else if (!(cb->src.flags & ECUFLAG_LOCAL)) {
+	} else if (!(cb->srcflags & ECUFLAG_LOCAL)) {
 		ret = -EADDRNOTAVAIL;
 		goto done;
 	}
 
 	/* verify destination */
-	if (cb->dst.name) {
-		ecu = j1939_ecu_find_by_name(cb->dst.name, cb->ifindex);
+	if (cb->dstname) {
+		ecu = j1939_ecu_find_by_name(cb->dstname, skb->dev->ifindex);
 		if (!ecu) {
 			ret = -EADDRNOTAVAIL;
 			goto done;
 		}
-		cb->dst.flags = ecu->flags;
+		cb->dstflags = ecu->flags;
 		put_j1939_ecu(ecu);
-	} else if (cb->dst.addr == J1939_IDLE_ADDR) {
+	} else if (j1939_address_is_unicast(cb->dstaddr)) {
+		cb->dstflags = priv->ents[cb->dstaddr].flags;
+	} else if (cb->dstaddr == J1939_IDLE_ADDR) {
 		/* not a valid destination */
 		ret = -EADDRNOTAVAIL;
 		goto done;
-	} else if (j1939_address_is_unicast(cb->dst.addr)) {
-		paddr = &priv->ents[cb->dst.addr];
-		cb->dst.flags = paddr->flags;
-	} else {
-		cb->dst.flags = 0;
-	}
+	} else
+		cb->dstflags = 0;
 
 	if (skb->len > 8)
 		ret = j1939_send_transport(skb);
