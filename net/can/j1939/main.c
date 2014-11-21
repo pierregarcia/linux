@@ -287,12 +287,10 @@ int netdev_enable_j1939(struct net_device *netdev)
 	kref_init(&priv->kref);
 
 	/* link into netdev */
-	spin_lock(&can_rcvlists_lock);
 	can_ml_priv = netdev->ml_priv;
 	if (!can_ml_priv->j1939_priv)
 		can_ml_priv->j1939_priv = priv;
 	ret = (can_ml_priv->j1939_priv == priv) ? 0 : -EBUSY;
-	spin_unlock(&can_rcvlists_lock);
 	if (ret < 0)
 		goto fail_register;
 
@@ -321,11 +319,9 @@ int netdev_disable_j1939(struct net_device *netdev)
 	BUG_ON(!netdev);
 
 	/* unlink from netdev */
-	spin_lock(&can_rcvlists_lock);
 	can_ml_priv = netdev->ml_priv;
 	priv = can_ml_priv->j1939_priv;
 	can_ml_priv->j1939_priv = NULL;
-	spin_unlock(&can_rcvlists_lock);
 	if (!priv)
 		return 0;
 	can_rx_unregister(netdev, J1939_CAN_ID, J1939_CAN_MASK,
@@ -419,12 +415,14 @@ static __exit void j1939_module_exit(void)
 	struct net_device *netdev;
 
 	/* shutdown j1939 for all netdevs */
-	for_each_netdev(&init_net, netdev) {
+	rcu_read_lock();
+	for_each_netdev_rcu(&init_net, netdev) {
 		if (netdev->type != ARPHRD_CAN)
 			continue;
 		/* netdev disable only disables when j1939 active */
 		netdev_disable_j1939(netdev);
 	}
+	rcu_read_unlock();
 
 	j1939tp_module_exit();
 
