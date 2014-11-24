@@ -267,7 +267,14 @@ static inline struct j1939_priv *dev_j1939_priv(struct net_device *dev)
 
 static inline struct j1939_priv *j1939_priv_find(int ifindex)
 {
-	return dev_j1939_priv(dev_get_by_index(&init_net, ifindex));
+	struct j1939_priv *priv;
+	struct net_device *netdev;
+
+	netdev = dev_get_by_index(&init_net, ifindex);
+	priv = dev_j1939_priv(netdev);
+	if (netdev)
+		dev_put(netdev);
+	return priv;
 }
 
 extern void j1939_priv_ac_task(unsigned long val);
