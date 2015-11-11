@@ -361,11 +361,13 @@ static int j1939tp_tx_dat(struct sk_buff *related, int extd,
 	struct j1939_sk_buff_cb *skb_cb;
 	uint8_t *skdat;
 
-	skb = dev_alloc_skb(8);
+	skb = dev_alloc_skb(sizeof(struct can_frame) + sizeof(struct can_skb_priv));
 	if (unlikely(!skb)) {
 		pr_alert("%s: out of memory?\n", __func__);
 		return -ENOMEM;
 	}
+	can_skb_reserve(skb);
+	can_skb_prv(skb)->ifindex = can_skb_prv(related)->ifindex;
 	skb->protocol = related->protocol;
 	skb->pkt_type = related->pkt_type;
 	skb->ip_summed = related->ip_summed;
@@ -397,11 +399,13 @@ static int j1939xtp_do_tx_ctl(struct sk_buff *related, int extd,
 	if (!j1939tp_im_involved(related, swap_src_dst))
 		return 0;
 
-	skb = dev_alloc_skb(8);
+	skb = dev_alloc_skb(sizeof(struct can_frame) + sizeof(struct can_skb_priv));
 	if (unlikely(!skb)) {
 		pr_alert("%s: out of memory?\n", __func__);
 		return -ENOMEM;
 	}
+	can_skb_reserve(skb);
+	can_skb_prv(skb)->ifindex = can_skb_prv(related)->ifindex;
 	skb->protocol = related->protocol;
 	skb->pkt_type = related->pkt_type;
 	skb->ip_summed = related->ip_summed;
@@ -1154,6 +1158,7 @@ int j1939_send_transport(struct sk_buff *skb)
 	if (!session)
 		return -ENOMEM;
 
+	session->skb_iif = can_skb_prv(skb)->ifindex;
 	session->extd = (skb->len > MAX_TP_PACKET_SIZE) ? EXTENDED : REGULAR;
 	session->transmission = 1;
 	session->pkt.total = (skb->len + 6)/7;
@@ -1266,6 +1271,10 @@ static struct session *j1939session_fresh_new(int size,
 	struct j1939_sk_buff_cb *cb;
 	struct session *session;
 
+	/* this SKB is allocated without headroom for CAN skb's.
+	 * This may not pose a problem, this SKB will never
+	 * enter generic CAN functions
+	 */
 	skb = dev_alloc_skb(size);
 	if (!skb)
 		return NULL;
@@ -1274,13 +1283,13 @@ static struct session *j1939session_fresh_new(int size,
 	memcpy(cb, rel_skb->cb, sizeof(*cb));
 	fix_cb(cb);
 	cb->pgn = pgn;
-	skb->skb_iif = rel_skb->skb_iif;
 
 	session = j1939session_new(skb);
 	if (!session) {
 		kfree(skb);
 		return NULL;
 	}
+	session->skb_iif = rel_skb->skb_iif;
 	/* alloc data area */
 	skb_put(skb, size);
 	return session;
@@ -1295,7 +1304,6 @@ static struct session *j1939session_new(struct sk_buff *skb)
 	INIT_LIST_HEAD(&session->list);
 	spin_lock_init(&session->lock);
 	session->skb = skb;
-	session->skb_iif = skb->skb_iif;
 
 	session->cb = (void *)session->skb->cb;
 	hrtimer_init(&session->txtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);

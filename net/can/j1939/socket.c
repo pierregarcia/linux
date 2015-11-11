@@ -19,6 +19,7 @@
 #include <net/tcp_states.h>
 
 #include <linux/can/core.h>
+#include <linux/can/skb.h>
 #include <linux/can/j1939.h>
 #include "j1939-priv.h"
 
@@ -798,10 +799,13 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 	if (!dev)
 		return -ENXIO;
 
-	skb = sock_alloc_send_skb(sk, size,
+	skb = sock_alloc_send_skb(sk, size + sizeof(struct can_skb_priv),
 			msg->msg_flags & MSG_DONTWAIT, &ret);
 	if (!skb)
 		goto put_dev;
+
+	can_skb_reserve(skb);
+	can_skb_prv(skb)->ifindex = dev->ifindex;
 
 	ret = memcpy_fromiovec(skb_put(skb, size), msg->msg_iov, size);
 	if (ret < 0)
