@@ -856,13 +856,11 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 
 	ret = j1939_send(skb);
 	if (ret < 0)
-		goto decrement_pending;
+		j1939_sock_pending_del(&jsk->sk);
 
 	dev_put(dev);
-	return size;
+	return (ret < 0) ? ret : size;
 
-decrement_pending:
-	j1939_sock_pending_del(&jsk->sk);
 free_skb:
 	kfree_skb(skb);
 put_dev:
