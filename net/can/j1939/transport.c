@@ -360,7 +360,8 @@ static int j1939tp_tx_dat(struct sk_buff *related, int extd,
 	struct j1939_sk_buff_cb *skb_cb;
 	uint8_t *skdat;
 
-	skb = dev_alloc_skb(sizeof(struct can_frame) + sizeof(struct can_skb_priv));
+	skb = alloc_skb(sizeof(struct can_frame) + sizeof(struct can_skb_priv),
+			GFP_ATOMIC);
 	if (unlikely(!skb)) {
 		pr_alert("%s: out of memory?\n", __func__);
 		return -ENOMEM;
@@ -373,9 +374,6 @@ static int j1939tp_tx_dat(struct sk_buff *related, int extd,
 	skb->protocol = related->protocol;
 	skb->pkt_type = related->pkt_type;
 	skb->ip_summed = related->ip_summed;
-	/* TODO: verify this */
-	/* not test for skb->sk, it is always set for tx_dat... */
-	can_skb_set_owner(skb, related->sk);
 
 	memcpy(skb->cb, related->cb, sizeof(skb->cb));
 	skb_cb = (void *)skb->cb;
@@ -398,7 +396,8 @@ static int j1939xtp_do_tx_ctl(struct sk_buff *related, int extd,
 	if (!j1939tp_im_involved(related, swap_src_dst))
 		return 0;
 
-	skb = dev_alloc_skb(sizeof(struct can_frame) + sizeof(struct can_skb_priv));
+	skb = alloc_skb(sizeof(struct can_frame) + sizeof(struct can_skb_priv),
+			GFP_ATOMIC);
 	if (unlikely(!skb)) {
 		pr_alert("%s: out of memory?\n", __func__);
 		return -ENOMEM;
@@ -410,9 +409,6 @@ static int j1939xtp_do_tx_ctl(struct sk_buff *related, int extd,
 	skb->protocol = related->protocol;
 	skb->pkt_type = related->pkt_type;
 	skb->ip_summed = related->ip_summed;
-	if (related->sk)
-		/* TODO: verify this */
-		can_skb_set_owner(skb, related->sk);
 
 	memcpy(skb->cb, related->cb, sizeof(skb->cb));
 	skb_cb = (void *)skb->cb;
@@ -1274,7 +1270,7 @@ static struct session *j1939session_fresh_new(int size,
 	 * This may not pose a problem, this SKB will never
 	 * enter generic CAN functions
 	 */
-	skb = dev_alloc_skb(size);
+	skb = alloc_skb(size, GFP_ATOMIC);
 	if (!skb)
 		return NULL;
 
