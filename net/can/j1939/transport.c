@@ -367,9 +367,13 @@ static int j1939tp_tx_dat(struct sk_buff *related, int extd,
 	}
 	can_skb_reserve(skb);
 	can_skb_prv(skb)->ifindex = can_skb_prv(related)->ifindex;
+	/* reserve CAN header */
+	skb_reserve(skb, offsetof(struct can_frame, data));
+
 	skb->protocol = related->protocol;
 	skb->pkt_type = related->pkt_type;
 	skb->ip_summed = related->ip_summed;
+	/* TODO: verify this */
 	/* not test for skb->sk, it is always set for tx_dat... */
 	can_skb_set_owner(skb, related->sk);
 
@@ -401,10 +405,13 @@ static int j1939xtp_do_tx_ctl(struct sk_buff *related, int extd,
 	}
 	can_skb_reserve(skb);
 	can_skb_prv(skb)->ifindex = can_skb_prv(related)->ifindex;
+	/* reserve CAN header */
+	skb_reserve(skb, offsetof(struct can_frame, data));
 	skb->protocol = related->protocol;
 	skb->pkt_type = related->pkt_type;
 	skb->ip_summed = related->ip_summed;
 	if (related->sk)
+		/* TODO: verify this */
 		can_skb_set_owner(skb, related->sk);
 
 	memcpy(skb->cb, related->cb, sizeof(skb->cb));

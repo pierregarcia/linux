@@ -799,13 +799,14 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 	if (!dev)
 		return -ENXIO;
 
-	skb = sock_alloc_send_skb(sk, size + sizeof(struct can_skb_priv),
+	skb = sock_alloc_send_skb(sk, size + sizeof(struct can_frame) - sizeof(((struct can_frame*)NULL)->data) + sizeof(struct can_skb_priv),
 			msg->msg_flags & MSG_DONTWAIT, &ret);
 	if (!skb)
 		goto put_dev;
 
 	can_skb_reserve(skb);
 	can_skb_prv(skb)->ifindex = dev->ifindex;
+	skb_reserve(skb, offsetof(struct can_frame, data));
 
 	ret = memcpy_fromiovec(skb_put(skb, size), msg->msg_iov, size);
 	if (ret < 0)

@@ -153,14 +153,11 @@ int j1939_send_can(struct sk_buff *skb)
 		ret = -EMSGSIZE;
 		goto failed;
 	}
-	ret = pskb_expand_head(skb, SKB_DATA_ALIGN(CAN_HDR),
-			CAN_FTR + (8-dlc), GFP_ATOMIC);
-	if (ret < 0)
-		return ret;
 
+	/* re-claim the CAN_HDR from the SKB */
 	cf = (void *)skb_push(skb, CAN_HDR);
 	BUG_ON(!cf);
-	/* make it a full can frame */
+	/* make it a full can frame again */
 	skb_put(skb, CAN_FTR + (8 - dlc));
 
 	sk_addr = (struct j1939_sk_buff_cb *)skb->cb;
