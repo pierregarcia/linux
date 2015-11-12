@@ -371,6 +371,7 @@ static int j1939tp_tx_dat(struct sk_buff *related, int extd,
 	/* reserve CAN header */
 	skb_reserve(skb, offsetof(struct can_frame, data));
 
+	skb->dev = related->dev;
 	skb->protocol = related->protocol;
 	skb->pkt_type = related->pkt_type;
 	skb->ip_summed = related->ip_summed;
@@ -402,6 +403,7 @@ static int j1939xtp_do_tx_ctl(struct sk_buff *related, int extd,
 		pr_alert("%s: out of memory?\n", __func__);
 		return -ENOMEM;
 	}
+	skb->dev = related->dev;
 	can_skb_reserve(skb);
 	can_skb_prv(skb)->ifindex = can_skb_prv(related)->ifindex;
 	/* reserve CAN header */
