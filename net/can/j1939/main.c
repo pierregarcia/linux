@@ -204,8 +204,6 @@ int j1939_send(struct sk_buff *skb)
 	if (!priv)
 		return -ENETUNREACH;
 
-	sock_hold(skb->sk);
-
 	read_lock_bh(&priv->lock);
 	/* verify source */
 	if (cb->srcname) {
@@ -254,7 +252,6 @@ int j1939_send(struct sk_buff *skb)
 		ret = j1939_send_can(skb);
 done:
 	read_unlock_bh(&priv->lock);
-	sock_put(skb->sk);
 	put_j1939_priv(priv);
 	return ret;
 }
