@@ -147,10 +147,12 @@ int j1939_send_can(struct sk_buff *skb)
 
 	ret = j1939_fixup_address_claim(skb);
 	if (unlikely(ret))
-		return ret;
+		goto failed;
 	dlc = skb->len;
-	if (dlc > 8)
-		return -EMSGSIZE;
+	if (dlc > 8) {
+		ret = -EMSGSIZE;
+		goto failed;
+	}
 	ret = pskb_expand_head(skb, SKB_DATA_ALIGN(CAN_HDR),
 			CAN_FTR + (8-dlc), GFP_ATOMIC);
 	if (ret < 0)
@@ -178,12 +180,9 @@ int j1939_send_can(struct sk_buff *skb)
 	} else
 		cf->can_dlc = dlc;
 
-	/* fix the 'always free' policy of can_send */
-	skb = skb_get(skb);
-	ret = can_send(skb, 1);
-	if (!ret)
-		/* free when can_send succeeded */
-		consume_skb(skb);
+	return can_send(skb, 1);
+failed:
+	consume_skb(skb);
 	return ret;
 }
 

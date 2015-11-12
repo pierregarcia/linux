@@ -356,7 +356,6 @@ static void j1939_skbcb_swap(struct j1939_sk_buff_cb *cb)
 static int j1939tp_tx_dat(struct sk_buff *related, int extd,
 		const uint8_t *dat, int len)
 {
-	int ret;
 	struct sk_buff *skb;
 	struct j1939_sk_buff_cb *skb_cb;
 	uint8_t *skdat;
@@ -382,16 +381,12 @@ static int j1939tp_tx_dat(struct sk_buff *related, int extd,
 
 	skdat = skb_put(skb, len);
 	memcpy(skdat, dat, len);
-	ret = j1939_send_can(skb);
-	if (ret < 0)
-		kfree_skb(skb);
-	return ret;
+	return j1939_send_can(skb);
 }
 
 static int j1939xtp_do_tx_ctl(struct sk_buff *related, int extd,
 		int swap_src_dst, pgn_t pgn, const uint8_t dat[5])
 {
-	int ret;
 	struct sk_buff *skb;
 	struct j1939_sk_buff_cb *skb_cb;
 	uint8_t *skdat;
@@ -425,10 +420,7 @@ static int j1939xtp_do_tx_ctl(struct sk_buff *related, int extd,
 	skdat[6] = (pgn >>  8) & 0xff;
 	skdat[5] = (pgn >>  0) & 0xff;
 
-	ret = j1939_send_can(skb);
-	if (ret)
-		kfree_skb(skb);
-	return ret;
+	return j1939_send_can(skb);
 }
 
 static inline int j1939tp_tx_ctl(struct session *session,
