@@ -812,7 +812,7 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 	if (ret < 0)
 		goto free_skb;
 	skb->dev = dev;
-	skb->sk  = sk;
+	can_skb_set_owner(skb, sk);
 
 	skb_cb = (void *) skb->cb;
 	memset(skb_cb, 0, sizeof(*skb_cb));
