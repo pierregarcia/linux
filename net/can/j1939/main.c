@@ -15,6 +15,7 @@
  */
 
 #include <linux/version.h>
+#include <linux/mutex.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/socket.h>
@@ -253,13 +254,36 @@ done:
 }
 EXPORT_SYMBOL_GPL(j1939_send);
 
+/*
+ * iterate over ECU's,
+ * and register flagged ecu's on their claimed SA
+ */
+static void j1939_priv_ac_task(unsigned long val)
+{
+	struct j1939_priv *priv = (void *)val;
+	struct j1939_ecu *ecu;
+
+	write_lock_bh(&priv->lock);
+	list_for_each_entry(ecu, &priv->ecus, list) {
+		/* next 2 (read & set) could be merged into xxx? */
+		if (!atomic_read(&ecu->ac_delay_expired))
+			continue;
+		atomic_set(&ecu->ac_delay_expired, 0);
+		if (j1939_address_is_unicast(ecu->sa))
+			ecu->parent->ents[ecu->sa].ecu = ecu;
+	}
+	write_unlock_bh(&priv->lock);
+}
+
 /* NETDEV MANAGEMENT */
 
 /* values for can_rx_(un)register */
 #define J1939_CAN_ID	CAN_EFF_FLAG
 #define J1939_CAN_MASK	(CAN_EFF_FLAG | CAN_RTR_FLAG)
 
-int netdev_enable_j1939(struct net_device *netdev)
+static DEFINE_MUTEX(j1939_netdev_lock);
+
+int j1939_netdev_start(struct net_device *netdev)
 {
 	int ret;
 	struct j1939_priv *priv;
@@ -269,56 +293,90 @@ int netdev_enable_j1939(struct net_device *netdev)
 	if (netdev->type != ARPHRD_CAN)
 		return -EAFNOSUPPORT;
 
+	mutex_lock(&j1939_netdev_lock);
+	can_ml_priv = netdev->ml_priv;
+	priv = can_ml_priv->j1939_priv;
+	if (priv) {
+		++priv->nusers;
+		goto done;
+	}
+
 	/* create/stuff j1939_priv */
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
-	if (!priv)
-		return -ENOMEM;
+	if (!priv) {
+		ret = -ENOMEM;
+		goto fail_mem;
+	}
 	tasklet_init(&priv->ac_task, j1939_priv_ac_task, (unsigned long)priv);
 	rwlock_init(&priv->lock);
 	INIT_LIST_HEAD(&priv->ecus);
+	priv->netdev = netdev;
 	priv->ifindex = netdev->ifindex;
 	kref_init(&priv->kref);
-
-	/* link into netdev */
-	can_ml_priv = netdev->ml_priv;
-	if (!can_ml_priv->j1939_priv)
-		can_ml_priv->j1939_priv = priv;
-	ret = (can_ml_priv->j1939_priv == priv) ? 0 : -EBUSY;
-	if (ret < 0)
-		goto fail_register;
+	priv->nusers = 1;
 
 	/* add CAN handler */
 	ret = can_rx_register(netdev, J1939_CAN_ID, J1939_CAN_MASK,
 			j1939_can_recv, priv, "j1939");
 	if (ret < 0)
-		goto fail_can_rx;
+		goto fail_can;
+
+	can_ml_priv->j1939_priv = priv;
+	dev_hold(netdev);
+done:
+	mutex_unlock(&j1939_netdev_lock);
 	return 0;
 
-fail_can_rx:
-	netdev_disable_j1939(netdev);
-	return ret;
-
-fail_register:
+fail_can:
 	kfree(priv);
+fail_mem:
+	mutex_unlock(&j1939_netdev_lock);
 	return ret;
 }
 
-int netdev_disable_j1939(struct net_device *netdev)
+void j1939_netdev_stop(struct net_device *netdev)
 {
 	struct dev_rcv_lists *can_ml_priv;
 	struct j1939_priv *priv;
-	struct j1939_ecu *ecu;
 
 	BUG_ON(!netdev);
+	if (netdev->type != ARPHRD_CAN)
+		return;
+	can_ml_priv = netdev->ml_priv;
+
+	mutex_lock(&j1939_netdev_lock);
+	priv = can_ml_priv->j1939_priv;
+	--priv->nusers;
+	if (priv->nusers) {
+		mutex_unlock(&j1939_netdev_lock);
+		return;
+	}
+	/* no users left, start breakdown */
 
 	/* unlink from netdev */
-	can_ml_priv = netdev->ml_priv;
-	priv = can_ml_priv->j1939_priv;
 	can_ml_priv->j1939_priv = NULL;
-	if (!priv)
-		return 0;
+	mutex_unlock(&j1939_netdev_lock);
+
 	can_rx_unregister(netdev, J1939_CAN_ID, J1939_CAN_MASK,
 			j1939_can_recv, priv);
+
+	/* remove pending transport protocol sessions */
+	j1939tp_rmdev_notifier(netdev);
+
+	/* final put */
+	put_j1939_priv(priv);
+	dev_put(netdev);
+}
+
+/*
+ * device interface
+ */
+static void on_put_j1939_priv(struct kref *kref)
+{
+	struct j1939_priv *priv = container_of(kref, struct j1939_priv, kref);
+	struct j1939_ecu *ecu;
+
+	tasklet_disable_nosync(&priv->ac_task);
 
 	/* cleanup priv */
 	write_lock_bh(&priv->lock);
@@ -329,14 +387,13 @@ int netdev_disable_j1939(struct net_device *netdev)
 		write_lock_bh(&priv->lock);
 	}
 	write_unlock_bh(&priv->lock);
-
-	/* final put */
-	put_j1939_priv(priv);
-	/* notify j1939 sockets */
-	j1939sk_netdev_event(netdev->ifindex, EHOSTDOWN);
-	return 0;
+	kfree(priv);
 }
 
+void put_j1939_priv(struct j1939_priv *segment)
+{
+	kref_put(&segment->kref, on_put_j1939_priv);
+}
 
 static int j1939_netdev_notify(struct notifier_block *nb,
 			unsigned long msg, void *data)
@@ -351,7 +408,6 @@ static int j1939_netdev_notify(struct notifier_block *nb,
 
 	switch (msg) {
 	case NETDEV_UNREGISTER:
-		netdev_disable_j1939(netdev);
 		j1939tp_rmdev_notifier(netdev);
 		j1939sk_netdev_event(netdev->ifindex, ENODEV);
 		break;
@@ -413,7 +469,7 @@ static __exit void j1939_module_exit(void)
 		if (netdev->type != ARPHRD_CAN)
 			continue;
 		/* netdev disable only disables when j1939 active */
-		netdev_disable_j1939(netdev);
+		j1939_netdev_stop(netdev);
 	}
 	rcu_read_unlock();
 

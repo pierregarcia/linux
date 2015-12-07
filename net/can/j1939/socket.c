@@ -39,6 +39,8 @@ struct j1939_sock {
 	#define PROMISC		BIT(2)
 	#define RECV_OWN	BIT(3)
 
+	int ifindex_started; /* ifindex of netdev */
+
 	struct {
 		name_t src, dst;
 		pgn_t pgn;
@@ -226,41 +228,33 @@ static int j1939sk_init(struct sock *sk)
 /*
  * helper: return <0 for error, >0 for error to notify
  */
-static int j1939sk_bind_netdev_helper(struct socket *sock)
+static int j1939_ifindex_start(int ifindex)
 {
-	struct j1939_sock *jsk = j1939_sk(sock->sk);
 	int ret;
 	struct net_device *netdev;
-	struct j1939_priv *priv;
 
-	if (!jsk->sk.sk_bound_dev_if)
-		return 0;
-	ret = 0;
-
-	netdev = dev_get_by_index(&init_net, jsk->sk.sk_bound_dev_if);
-	if (!netdev) {
-		ret = -ENODEV;
-		goto fail_netdev;
-	}
+	netdev = dev_get_by_index(&init_net, ifindex);
+	if (!netdev)
+		return -ENODEV;
 
 	/* no need to test for CAN device,
-	 * implicitely done by j1939_priv
+	 * done by j1939_netdev_start
 	 */
-	priv = dev_j1939_priv(netdev);
-	if (!priv) {
-		ret = -EHOSTDOWN;
-		goto fail_priv;
-	}
+	ret = j1939_netdev_start(netdev);
 
-	if (!(netdev->flags & IFF_UP)) {
-		sock->sk->sk_err = ENETDOWN;
-		sock->sk->sk_error_report(sock->sk);
-	}
-	put_j1939_priv(priv);
-fail_priv:
 	dev_put(netdev);
-fail_netdev:
 	return ret;
+}
+
+static void j1939_ifindex_stop(int ifindex)
+{
+	struct net_device *netdev;
+
+	netdev = dev_get_by_index(&init_net, ifindex);
+	if (netdev) {
+		j1939_netdev_stop(netdev);
+		dev_put(netdev);
+	}
 }
 
 static int j1939sk_bind_addr_helper(int ifindex, uint8_t addr)
@@ -290,7 +284,7 @@ static int j1939sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 {
 	struct sockaddr_can *addr = (struct sockaddr_can *)uaddr;
 	struct j1939_sock *jsk = j1939_sk(sock->sk);
-	int ret, old_state;
+	int ret, old_state, bound_dev_if;
 
 	if (len < required_size(can_addr.j1939, *addr))
 		return -EINVAL;
@@ -331,25 +325,44 @@ static int j1939sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 		return 0;
 	}
 
-	/* do netdev */
-	if (jsk->sk.sk_bound_dev_if && addr->can_ifindex &&
-			(jsk->sk.sk_bound_dev_if != addr->can_ifindex)) {
-		ret = -EBADR;
-		goto fail_locked;
+	/* bind to device ... */
+	bound_dev_if = jsk->sk.sk_bound_dev_if;
+	/* copy netdev info */
+	if (!bound_dev_if && addr->can_ifindex)
+		bound_dev_if = addr->can_ifindex;
+	else if (bound_dev_if && addr->can_ifindex) {
+		/* do netdev */
+		if (bound_dev_if != addr->can_ifindex) {
+			ret = -EBUSY;
+			goto fail_locked;
+		}
 	}
-	if (!jsk->sk.sk_bound_dev_if)
-		jsk->sk.sk_bound_dev_if = addr->can_ifindex;
-
-	ret = j1939sk_bind_netdev_helper(sock);
-	if (ret < 0)
-		goto fail_locked;
+	/* start j1939 */
+	if (bound_dev_if && bound_dev_if != jsk->ifindex_started) {
+		if (jsk->ifindex_started) {
+			ret = -EBUSY;
+			goto fail_locked;
+		}
+		ret = j1939_ifindex_start(bound_dev_if);
+		if (ret < 0)
+			goto fail_locked;
+		jsk->ifindex_started = bound_dev_if;
+	}
 
 	/* bind name/addr */
+	if ((addr->can_addr.j1939.name ||
+			(addr->can_addr.j1939.addr != J1939_NO_ADDR)) &&
+			!jsk->sk.sk_bound_dev_if) {
+		/* cannot proceed without ifindex */
+		ret = -EINVAL;
+		goto fail_locked; /* j1939 not started (for me) */
+	}
+
 	if (addr->can_addr.j1939.name) {
 		struct j1939_ecu *ecu;
 
 		ecu = j1939_ecu_find_by_name(addr->can_addr.j1939.name,
-				jsk->sk.sk_bound_dev_if);
+				bound_dev_if);
 		if (!ecu || IS_ERR(ecu)) {
 			ret = -EADDRNOTAVAIL;
 			goto fail_locked;
@@ -357,30 +370,18 @@ static int j1939sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 			ret = -EREMOTE;
 			put_j1939_ecu(ecu);
 			goto fail_locked;
-		} else if (jsk->sk.sk_bound_dev_if != ecu->parent->ifindex) {
-			ret = -EHOSTUNREACH;
-			put_j1939_ecu(ecu);
-			goto fail_locked;
 		}
 		jsk->addr.src = ecu->name;
 		jsk->addr.sa = addr->can_addr.j1939.addr;
 		put_j1939_ecu(ecu);
 	} else if (j1939_address_is_unicast(addr->can_addr.j1939.addr)) {
-		ret = j1939sk_bind_addr_helper(jsk->sk.sk_bound_dev_if,
+		ret = j1939sk_bind_addr_helper(bound_dev_if,
 				addr->can_addr.j1939.addr);
 		if (ret < 0)
 			goto fail_locked;
 		jsk->addr.sa = addr->can_addr.j1939.addr;
-	} else if (addr->can_addr.j1939.addr == J1939_IDLE_ADDR) {
-		/* static addressing, netdev is required */
-		if (!jsk->sk.sk_bound_dev_if) {
-			ret = -EINVAL;
-			goto fail_locked;
-		}
+	} else if (addr->can_addr.j1939.addr == J1939_IDLE_ADDR)
 		jsk->addr.sa = addr->can_addr.j1939.addr;
-	} else {
-		/* no name, no addr */
-	}
 
 	/* set default transmit pgn */
 	if (pgn_is_valid(addr->can_addr.j1939.pgn))
@@ -388,6 +389,7 @@ static int j1939sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 
 	old_state = jsk->state;
 	jsk->state |= JSK_BOUND;
+	jsk->sk.sk_bound_dev_if = bound_dev_if;
 
 	if (!(old_state & (JSK_BOUND | JSK_CONNECTED))) {
 		spin_lock_bh(&j1939_socks_lock);
@@ -398,6 +400,12 @@ static int j1939sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 	ret = 0;
 
 fail_locked:
+	if (!jsk->sk.sk_bound_dev_if && jsk->ifindex_started) {
+		/* started j1939 on this netdev during this call,
+		 * so we revert that */
+		j1939_ifindex_stop(jsk->ifindex_started);
+		jsk->ifindex_started = 0;
+	}
 	release_sock(sock->sk);
 	return ret;
 }
@@ -409,7 +417,7 @@ static int j1939sk_connect(struct socket *sock, struct sockaddr *uaddr,
 	struct sockaddr_can *addr = (struct sockaddr_can *)uaddr;
 	struct j1939_sock *jsk = j1939_sk(sock->sk);
 	struct j1939_ecu *ecu;
-	int ifindex;
+	int bound_dev_if;
 
 	if (!uaddr)
 		return -EDESTADDRREQ;
@@ -425,27 +433,43 @@ static int j1939sk_connect(struct socket *sock, struct sockaddr *uaddr,
 		goto fail_locked;
 	}
 
-	ifindex = jsk->sk.sk_bound_dev_if;
-	if (ifindex && addr->can_ifindex && (ifindex != addr->can_ifindex)) {
-		ret = -ECONNREFUSED;
-		goto fail_locked;
+	/* bind to device ... */
+	bound_dev_if = jsk->sk.sk_bound_dev_if;
+	/* copy netdev info */
+	if (!bound_dev_if && addr->can_ifindex)
+		bound_dev_if = addr->can_ifindex;
+	else if (bound_dev_if && addr->can_ifindex) {
+		/* do netdev */
+		if (bound_dev_if != addr->can_ifindex) {
+			ret = -EBUSY;
+			goto fail_locked;
+		}
 	}
-	if (!ifindex)
-		ifindex = addr->can_ifindex;
+	/* start j1939 */
+	if (bound_dev_if && bound_dev_if != jsk->ifindex_started) {
+		if (jsk->ifindex_started) {
+			ret = -EBUSY;
+			goto fail_locked;
+		}
+		ret = j1939_ifindex_start(bound_dev_if);
+		if (ret < 0)
+			goto fail_locked;
+		jsk->ifindex_started = bound_dev_if;
+	}
 
 	/* lookup destination */
 	if (addr->can_addr.j1939.name) {
 		ecu = j1939_ecu_find_by_name(addr->can_addr.j1939.name,
-				ifindex);
+				bound_dev_if);
 		if (!ecu) {
 			ret = -EADDRNOTAVAIL;
 			goto fail_locked;
 		}
-		if (ifindex && (ifindex != ecu->parent->ifindex)) {
+		if (bound_dev_if && (bound_dev_if != ecu->parent->ifindex)) {
 			ret = -EHOSTUNREACH;
 			goto fail_locked;
 		}
-		ifindex = ecu->parent->ifindex;
+		bound_dev_if = ecu->parent->ifindex;
 		jsk->addr.dst = ecu->name;
 		jsk->addr.da = ecu->sa;
 		put_j1939_ecu(ecu);
@@ -454,12 +478,9 @@ static int j1939sk_connect(struct socket *sock, struct sockaddr *uaddr,
 		jsk->addr.dst = 0;
 		jsk->addr.da = addr->can_addr.j1939.addr;
 	}
-	/*
-	 * take a default source when not present, so connected sockets
-	 * will stick to the same source ECU
-	 */
+	/* autobind */
 	if (!jsk->addr.src && !j1939_address_is_valid(jsk->addr.sa)) {
-		ecu = j1939_ecu_find_priv_default_tx(ifindex,
+		ecu = j1939_ecu_find_priv_default_tx(bound_dev_if,
 				&jsk->addr.src, &jsk->addr.sa);
 		if (IS_ERR(ecu)) {
 			ret = PTR_ERR(ecu);
@@ -469,7 +490,7 @@ static int j1939sk_connect(struct socket *sock, struct sockaddr *uaddr,
 	}
 
 	/* start assigning, no problem can occur at this point anymore */
-	jsk->sk.sk_bound_dev_if = ifindex;
+	jsk->sk.sk_bound_dev_if = bound_dev_if;
 
 	if (!(jsk->state & JSK_BOUND) || !pgn_is_valid(jsk->addr.pgn)) {
 		/*
@@ -490,6 +511,12 @@ static int j1939sk_connect(struct socket *sock, struct sockaddr *uaddr,
 	ret = 0;
 
 fail_locked:
+	if (!jsk->sk.sk_bound_dev_if && jsk->ifindex_started) {
+		/* started j1939 on this netdev during this call,
+		 * so we revert that */
+		j1939_ifindex_stop(jsk->ifindex_started);
+		jsk->ifindex_started = 0;
+	}
 	release_sock(sock->sk);
 	return ret;
 }
@@ -543,6 +570,9 @@ static int j1939sk_release(struct socket *sock)
 
 	if (jsk->state & PROMISC)
 		j1939_put_promisc_receiver(jsk->sk.sk_bound_dev_if);
+	if (jsk->ifindex_started)
+		j1939_ifindex_stop(jsk->ifindex_started);
+	jsk->ifindex_started = 0;
 
 	sock_orphan(sk);
 	sock->sk = NULL;
@@ -918,7 +948,6 @@ const struct can_proto j1939_can_proto = {
 	.ops = &j1939_ops,
 	.prot = &j1939_proto,
 
-	.rtnl_link_ops = &j1939_rtnl_af_ops,
 	.rtnl_new_addr = j1939rtnl_new_addr,
 	.rtnl_del_addr = j1939rtnl_del_addr,
 	.rtnl_dump_addr = j1939rtnl_dump_addr,

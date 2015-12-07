@@ -74,6 +74,7 @@ struct j1939_priv {
 	 * segments need a lock to protect the above list
 	 */
 	int ifindex;
+	struct net_device *netdev;
 	struct addr_ent {
 		ktime_t rxtime;
 		struct j1939_ecu *ecu;
@@ -93,6 +94,11 @@ struct j1939_priv {
 	 * don't use directly, use j1939_ecu_set_address() instead
 	 */
 	struct kref kref;
+	/*
+	 * ref counter that hold the number of active listeners.
+	 * This number itself is protected with a mutex
+	 */
+	int nusers;
 };
 #define to_j1939_priv(x) container_of((x), struct j1939_priv, dev)
 
@@ -245,8 +251,8 @@ extern struct j1939_ecu *j1939_ecu_get_register(name_t name, int ifindex,
 		int flags, int return_existing);
 extern void j1939_ecu_unregister(struct j1939_ecu *);
 
-extern int netdev_enable_j1939(struct net_device *);
-extern int netdev_disable_j1939(struct net_device *);
+extern int j1939_netdev_start(struct net_device *);
+extern void j1939_netdev_stop(struct net_device *);
 
 static inline struct j1939_priv *dev_j1939_priv(struct net_device *dev)
 {
@@ -277,8 +283,6 @@ static inline struct j1939_priv *j1939_priv_find(int ifindex)
 	return priv;
 }
 
-extern void j1939_priv_ac_task(unsigned long val);
-
 /* notify/alert all j1939 sockets bound to ifindex */
 extern void j1939sk_netdev_event(int ifindex, int error_code);
 extern int j1939tp_rmdev_notifier(struct net_device *netdev);
@@ -297,7 +301,6 @@ extern void j1939tp_module_exit(void);
 extern const struct can_proto j1939_can_proto;
 
 /* rtnetlink */
-extern const struct rtnl_af_ops j1939_rtnl_af_ops;
 extern int j1939rtnl_new_addr(struct sk_buff *, struct nlmsghdr *);
 extern int j1939rtnl_del_addr(struct sk_buff *, struct nlmsghdr *);
 extern int j1939rtnl_dump_addr(struct sk_buff *, struct netlink_callback *);

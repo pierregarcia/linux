@@ -30,43 +30,6 @@
 		(ecu)->name, (ecu)->sa, ##__VA_ARGS__)
 
 /*
- * iterate over ECU's,
- * and register flagged ecu's on their claimed SA
- */
-void j1939_priv_ac_task(unsigned long val)
-{
-	struct j1939_priv *priv = (void *)val;
-	struct j1939_ecu *ecu;
-
-	write_lock_bh(&priv->lock);
-	list_for_each_entry(ecu, &priv->ecus, list) {
-		/* next 2 (read & set) could be merged into xxx? */
-		if (!atomic_read(&ecu->ac_delay_expired))
-			continue;
-		atomic_set(&ecu->ac_delay_expired, 0);
-		if (j1939_address_is_unicast(ecu->sa))
-			ecu->parent->ents[ecu->sa].ecu = ecu;
-	}
-	write_unlock_bh(&priv->lock);
-}
-/*
- * device interface
- */
-static void cb_put_j1939_priv(struct kref *kref)
-{
-	struct j1939_priv *priv =
-		container_of(kref, struct j1939_priv, kref);
-
-	tasklet_disable_nosync(&priv->ac_task);
-	kfree(priv);
-}
-
-void put_j1939_priv(struct j1939_priv *segment)
-{
-	kref_put(&segment->kref, cb_put_j1939_priv);
-}
-
-/*
  * ECU device interface
  */
 static enum hrtimer_restart j1939_ecu_timer_handler(struct hrtimer *hrtimer)
