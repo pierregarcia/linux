@@ -23,10 +23,10 @@
 #include "j1939-priv.h"
 
 #define ecu_dbg(ecu, fmt, ...) \
-	pr_debug("j1939-%i,%016llx,%02x: " fmt, (ecu)->parent->ifindex, \
+	pr_debug("j1939-%i,%016llx,%02x: " fmt, (ecu)->priv->ifindex, \
 		(ecu)->name, (ecu)->sa, ##__VA_ARGS__)
 #define ecu_alert(ecu, fmt, ...) \
-	pr_alert("j1939-%i,%016llx,%02x: " fmt, (ecu)->parent->ifindex, \
+	pr_alert("j1939-%i,%016llx,%02x: " fmt, (ecu)->priv->ifindex, \
 		(ecu)->name, (ecu)->sa, ##__VA_ARGS__)
 
 /*
@@ -38,7 +38,7 @@ static enum hrtimer_restart j1939_ecu_timer_handler(struct hrtimer *hrtimer)
 		container_of(hrtimer, struct j1939_ecu, ac_timer);
 
 	atomic_set(&ecu->ac_delay_expired, 1);
-	tasklet_schedule(&ecu->parent->ac_task);
+	tasklet_schedule(&ecu->priv->ac_task);
 	return HRTIMER_NORESTART;
 }
 
@@ -79,7 +79,7 @@ struct j1939_ecu *_j1939_ecu_get_register(struct j1939_priv *priv, name_t name,
 
 	/* first add to internal list */
 	/* a ref to priv is held */
-	ecu->parent = priv;
+	ecu->priv = priv;
 	list_add_tail(&ecu->list, &priv->ecus);
 
 	ecu_dbg(ecu, "register\n");
@@ -101,19 +101,19 @@ void _j1939_ecu_unregister(struct j1939_ecu *ecu)
 struct j1939_ecu *j1939_ecu_find_by_addr(int sa, int ifindex)
 {
 	struct j1939_ecu *ecu;
-	struct j1939_priv *parent;
+	struct j1939_priv *priv;
 
 	if (!j1939_address_is_unicast(sa))
 		return NULL;
-	parent = j1939_priv_find(ifindex);
-	if (!parent)
+	priv = j1939_priv_find(ifindex);
+	if (!priv)
 		return NULL;
-	read_lock_bh(&parent->lock);
-	ecu = parent->ents[sa].ecu;
+	read_lock_bh(&priv->lock);
+	ecu = priv->ents[sa].ecu;
 	if (ecu)
 		get_j1939_ecu(ecu);
-	read_unlock_bh(&parent->lock);
-	put_j1939_priv(parent);
+	read_unlock_bh(&priv->lock);
+	put_j1939_priv(priv);
 	return ecu;
 }
 
