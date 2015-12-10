@@ -50,7 +50,7 @@ struct j1939_ecu {
 	atomic_t ac_delay_expired;
 	struct hrtimer ac_timer;
 	struct kref kref;
-	struct j1939_priv *parent;
+	struct j1939_priv *priv;
 	/* count users, to help transport protocol decide for interaction */
 	int nusers;
 };
@@ -58,7 +58,7 @@ struct j1939_ecu {
 
 struct j1939_priv {
 	struct list_head ecus; /*
-	 * local list entry in parent
+	 * local list entry in priv
 	 * These allow irq (& softirq) context lookups on j1939 devices
 	 * This approach (seperate lists) is done as the other 2 alternatives
 	 * are not easier or even wrong
@@ -162,9 +162,9 @@ static inline void _j1939_ecu_remove_sa(struct j1939_ecu *ecu)
 {
 	if (!j1939_address_is_unicast(ecu->sa))
 		return;
-	if (ecu->parent && ecu->parent->ents[ecu->sa].ecu == ecu) {
-		ecu->parent->ents[ecu->sa].ecu = NULL;
-		ecu->parent->ents[ecu->sa].nusers -= ecu->nusers;
+	if (ecu->priv && ecu->priv->ents[ecu->sa].ecu == ecu) {
+		ecu->priv->ents[ecu->sa].ecu = NULL;
+		ecu->priv->ents[ecu->sa].nusers -= ecu->nusers;
 	}
 }
 
@@ -172,9 +172,9 @@ static inline void j1939_ecu_remove_sa(struct j1939_ecu *ecu)
 {
 	if (!j1939_address_is_unicast(ecu->sa))
 		return;
-	write_lock_bh(&ecu->parent->lock);
+	write_lock_bh(&ecu->priv->lock);
 	_j1939_ecu_remove_sa(ecu);
-	write_unlock_bh(&ecu->parent->lock);
+	write_unlock_bh(&ecu->priv->lock);
 }
 
 extern int j1939_name_to_sa(uint64_t name, int ifindex);

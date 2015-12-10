@@ -199,8 +199,8 @@ static void j1939_priv_ac_task(unsigned long val)
 			continue;
 		atomic_set(&ecu->ac_delay_expired, 0);
 		if (j1939_address_is_unicast(ecu->sa)) {
-			ecu->parent->ents[ecu->sa].ecu = ecu;
-			ecu->parent->ents[ecu->sa].nusers += ecu->nusers;
+			ecu->priv->ents[ecu->sa].ecu = ecu;
+			ecu->priv->ents[ecu->sa].nusers += ecu->nusers;
 		}
 	}
 	write_unlock_bh(&priv->lock);
