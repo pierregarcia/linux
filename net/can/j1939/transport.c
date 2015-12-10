@@ -1159,7 +1159,7 @@ int j1939_send_transport(struct sk_buff *skb)
 	priv = j1939_priv_find(can_skb_prv(skb)->ifindex);
 	if (!priv)
 		return -EINVAL;
-	if (j1939_address_is_valid(cb->dstaddr) ||
+	if (!j1939_address_is_valid(cb->dstaddr) ||
 			(j1939_address_is_unicast(cb->dstaddr) &&
 				priv->ents[cb->dstaddr].nusers))
 		cb->dstflags |= ECU_LOCAL;
