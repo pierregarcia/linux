@@ -111,7 +111,7 @@ static inline int j1939_no_address(const struct sock *sk)
 }
 
 /* matches skb control buffer (addr) with a j1939 filter */
-static inline int packet_match(const struct j1939_sk_buff_cb *cb,
+static inline int packet_match(const struct j1939_sk_buff_cb *skcb,
 		const struct j1939_filter *f, int nfilter)
 {
 	if (!nfilter)
@@ -123,11 +123,11 @@ static inline int packet_match(const struct j1939_sk_buff_cb *cb,
 	 * Sockets using dynamic addressing in their filters should not set it.
 	 */
 	for (; nfilter; ++f, --nfilter) {
-		if ((cb->pgn & f->pgn_mask) != (f->pgn & f->pgn_mask))
+		if ((skcb->pgn & f->pgn_mask) != (f->pgn & f->pgn_mask))
 			continue;
-		if ((cb->srcaddr & f->addr_mask) != (f->addr & f->addr_mask))
+		if ((skcb->srcaddr & f->addr_mask) != (f->addr & f->addr_mask))
 			continue;
-		if ((cb->srcname & f->name_mask) != (f->name & f->name_mask))
+		if ((skcb->srcname & f->name_mask) != (f->name & f->name_mask))
 			continue;
 		return 1;
 	}
@@ -138,7 +138,7 @@ static inline int packet_match(const struct j1939_sk_buff_cb *cb,
 static void j1939sk_recv_skb(struct sk_buff *oskb, struct j1939_sock *jsk)
 {
 	struct sk_buff *skb;
-	struct j1939_sk_buff_cb *cb = (void *)oskb->cb;
+	struct j1939_sk_buff_cb *skcb = (void *)oskb->cb;
 
 	if (!(jsk->state & (JSK_BOUND | JSK_CONNECTED)))
 		return;
@@ -149,8 +149,8 @@ static void j1939sk_recv_skb(struct sk_buff *oskb, struct j1939_sock *jsk)
 	if (!(jsk->state & PROMISC)) {
 		if (jsk->addr.src) {
 			/* reject message for other destinations */
-			if (cb->dstname &&
-				(cb->dstname != jsk->addr.src))
+			if (skcb->dstname &&
+				(skcb->dstname != jsk->addr.src))
 				/*
 				 * the msg is not destined for the name
 				 * that the socket is bound to
@@ -158,8 +158,8 @@ static void j1939sk_recv_skb(struct sk_buff *oskb, struct j1939_sock *jsk)
 				return;
 		} else {
 			/* reject messages for other destination addresses */
-			if (j1939_address_is_unicast(cb->dstaddr) &&
-				(cb->dstaddr != jsk->addr.sa))
+			if (j1939_address_is_unicast(skcb->dstaddr) &&
+				(skcb->dstaddr != jsk->addr.sa))
 				/*
 				 * the msg is not destined for the name
 				 * that the socket is bound to
@@ -168,11 +168,11 @@ static void j1939sk_recv_skb(struct sk_buff *oskb, struct j1939_sock *jsk)
 		}
 	}
 
-	if ((cb->insock == &jsk->sk) && !(jsk->state & RECV_OWN))
+	if ((skcb->insock == &jsk->sk) && !(jsk->state & RECV_OWN))
 		/* own message */
 		return;
 
-	if (!packet_match(cb, jsk->filters, jsk->nfilters))
+	if (!packet_match(skcb, jsk->filters, jsk->nfilters))
 		return;
 
 	skb = skb_clone(oskb, GFP_ATOMIC);
@@ -180,12 +180,12 @@ static void j1939sk_recv_skb(struct sk_buff *oskb, struct j1939_sock *jsk)
 		j1939_warning("skb clone failed\n");
 		return;
 	}
-	cb = (void *)skb->cb;
-	cb->msg_flags &= ~(MSG_DONTROUTE | MSG_CONFIRM);
-	if (cb->insock)
-		cb->msg_flags |= MSG_DONTROUTE;
-	if (cb->insock == &jsk->sk)
-		cb->msg_flags |= MSG_CONFIRM;
+	skcb = (void *)skb->cb;
+	skcb->msg_flags &= ~(MSG_DONTROUTE | MSG_CONFIRM);
+	if (skcb->insock)
+		skcb->msg_flags |= MSG_DONTROUTE;
+	if (skcb->insock == &jsk->sk)
+		skcb->msg_flags |= MSG_CONFIRM;
 
 	if (sock_queue_rcv_skb(&jsk->sk, skb) < 0)
 		kfree_skb(skb);
@@ -605,7 +605,7 @@ static int j1939sk_recvmsg(struct kiocb *iocb, struct socket *sock,
 {
 	struct sock *sk = sock->sk;
 	struct sk_buff *skb;
-	struct j1939_sk_buff_cb *sk_addr;
+	struct j1939_sk_buff_cb *skcb;
 	int ret = 0;
 
 	skb = skb_recv_datagram(sk, flags, 0, &ret);
@@ -622,18 +622,18 @@ static int j1939sk_recvmsg(struct kiocb *iocb, struct socket *sock,
 		goto failed_with_skb;
 
 	sock_recv_timestamp(msg, sk, skb);
-	sk_addr = (void *)skb->cb;
+	skcb = (void *)skb->cb;
 
-	if (j1939_address_is_valid(sk_addr->dstaddr))
+	if (j1939_address_is_valid(skcb->dstaddr))
 		put_cmsg(msg, SOL_CAN_J1939, SCM_J1939_DEST_ADDR,
-				sizeof(sk_addr->dstaddr), &sk_addr->dstaddr);
+				sizeof(skcb->dstaddr), &skcb->dstaddr);
 
-	if (sk_addr->dstname)
+	if (skcb->dstname)
 		put_cmsg(msg, SOL_CAN_J1939, SCM_J1939_DEST_NAME,
-				sizeof(sk_addr->dstname), &sk_addr->dstname);
+				sizeof(skcb->dstname), &skcb->dstname);
 
 	put_cmsg(msg, SOL_CAN_J1939, SCM_J1939_PRIO,
-			sizeof(sk_addr->priority), &sk_addr->priority);
+			sizeof(skcb->priority), &skcb->priority);
 
 	if (msg->msg_name) {
 		struct sockaddr_can *paddr = msg->msg_name;
@@ -642,12 +642,12 @@ static int j1939sk_recvmsg(struct kiocb *iocb, struct socket *sock,
 		memset(msg->msg_name, 0, msg->msg_namelen);
 		paddr->can_family = AF_CAN;
 		paddr->can_ifindex = skb->skb_iif;
-		paddr->can_addr.j1939.name = sk_addr->srcname;
-		paddr->can_addr.j1939.addr = sk_addr->srcaddr;
-		paddr->can_addr.j1939.pgn = sk_addr->pgn;
+		paddr->can_addr.j1939.name = skcb->srcname;
+		paddr->can_addr.j1939.addr = skcb->srcaddr;
+		paddr->can_addr.j1939.pgn = skcb->pgn;
 	}
 
-	msg->msg_flags |= sk_addr->msg_flags;
+	msg->msg_flags |= skcb->msg_flags;
 	skb_free_datagram(sk, skb);
 
 	return size;
@@ -662,7 +662,7 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 {
 	struct sock *sk = sock->sk;
 	struct j1939_sock *jsk = j1939_sk(sk);
-	struct j1939_sk_buff_cb *skb_cb;
+	struct j1939_sk_buff_cb *skcb;
 	struct sk_buff *skb;
 	struct net_device *dev;
 	int ifindex;
@@ -715,34 +715,34 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 	skb->dev = dev;
 	can_skb_set_owner(skb, sk);
 
-	skb_cb = (void *) skb->cb;
-	memset(skb_cb, 0, sizeof(*skb_cb));
-	skb_cb->msg_flags = msg->msg_flags;
-	skb_cb->srcname = jsk->addr.src;
-	skb_cb->dstname = jsk->addr.dst;
-	skb_cb->pgn = jsk->addr.pgn;
-	skb_cb->priority = j1939_prio(jsk->sk.sk_priority);
-	skb_cb->srcaddr = jsk->addr.sa;
-	skb_cb->dstaddr = jsk->addr.da;
+	skcb = (void *)skb->cb;
+	memset(skcb, 0, sizeof(*skcb));
+	skcb->msg_flags = msg->msg_flags;
+	skcb->srcname = jsk->addr.src;
+	skcb->dstname = jsk->addr.dst;
+	skcb->pgn = jsk->addr.pgn;
+	skcb->priority = j1939_prio(jsk->sk.sk_priority);
+	skcb->srcaddr = jsk->addr.sa;
+	skcb->dstaddr = jsk->addr.da;
 
 	if (msg->msg_name) {
 		struct sockaddr_can *addr = msg->msg_name;
 
 		if (addr->can_addr.j1939.name ||
 				(addr->can_addr.j1939.addr != J1939_NO_ADDR)) {
-			skb_cb->dstname = addr->can_addr.j1939.name;
-			skb_cb->dstaddr = addr->can_addr.j1939.addr;
+			skcb->dstname = addr->can_addr.j1939.name;
+			skcb->dstaddr = addr->can_addr.j1939.addr;
 		}
 		if (pgn_is_valid(addr->can_addr.j1939.pgn))
-			skb_cb->pgn = addr->can_addr.j1939.pgn;
+			skcb->pgn = addr->can_addr.j1939.pgn;
 	}
-	if (!pgn_is_valid(skb_cb->pgn)) {
+	if (!pgn_is_valid(skcb->pgn)) {
 		ret = -EINVAL;
 		goto free_skb;
 	}
 
-	if (skb_cb->msg_flags & J1939_MSG_SYNC) {
-		if (skb_cb->msg_flags & MSG_DONTWAIT) {
+	if (skcb->msg_flags & J1939_MSG_SYNC) {
+		if (skcb->msg_flags & MSG_DONTWAIT) {
 			ret = j1939_sock_pending_add_first(&jsk->sk);
 			if (ret > 0)
 				ret = -EAGAIN;

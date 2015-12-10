@@ -229,9 +229,9 @@ struct j1939_sk_buff_cb {
 #define J1939_MSG_RESERVED	MSG_SYN
 #define J1939_MSG_SYNC		MSG_SYN
 
-static inline int j1939cb_is_broadcast(const struct j1939_sk_buff_cb *cb)
+static inline int j1939cb_is_broadcast(const struct j1939_sk_buff_cb *skcb)
 {
-	return (!cb->dstname && (cb->dstaddr >= 0xff));
+	return (!skcb->dstname && (skcb->dstaddr >= 0xff));
 }
 
 extern int j1939_send(struct sk_buff *);
