@@ -23,6 +23,8 @@
 #include <linux/can/j1939.h>
 #include "j1939-priv.h"
 
+#define J1939_MIN_NAMELEN required_size(can_addr.j1939, struct sockaddr_can)
+
 /*
  * list of sockets
  */
@@ -257,7 +259,7 @@ static int j1939sk_bind(struct socket *sock, struct sockaddr *uaddr, int len)
 	int ret, bound_dev_if;
 	struct j1939_priv *priv;
 
-	if (len < required_size(can_addr.j1939, *addr))
+	if (len < J1939_MIN_NAMELEN)
 		return -EINVAL;
 	if (addr->can_family != AF_CAN)
 		return -EINVAL;
@@ -345,7 +347,7 @@ static int j1939sk_connect(struct socket *sock, struct sockaddr *uaddr,
 	if (!uaddr)
 		return -EDESTADDRREQ;
 
-	if (len < required_size(can_addr.j1939, *addr))
+	if (len < J1939_MIN_NAMELEN)
 		return -EINVAL;
 	if (addr->can_family != AF_CAN)
 		return -EINVAL;
@@ -430,7 +432,7 @@ static int j1939sk_getname(struct socket *sock, struct sockaddr *uaddr,
 	}
 
 	j1939sk_sock2sockaddr_can(addr, jsk, peer);
-	*len = sizeof(*addr);
+	*len = J1939_MIN_NAMELEN;
 
 failure:
 	release_sock(sk);
@@ -638,7 +640,7 @@ static int j1939sk_recvmsg(struct kiocb *iocb, struct socket *sock,
 	if (msg->msg_name) {
 		struct sockaddr_can *paddr = msg->msg_name;
 
-		msg->msg_namelen = required_size(can_addr.j1939, *paddr);
+		msg->msg_namelen = J1939_MIN_NAMELEN;
 		memset(msg->msg_name, 0, msg->msg_namelen);
 		paddr->can_family = AF_CAN;
 		paddr->can_ifindex = skb->skb_iif;
@@ -662,39 +664,33 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 {
 	struct sock *sk = sock->sk;
 	struct j1939_sock *jsk = j1939_sk(sk);
+	struct sockaddr_can *addr = msg->msg_name;
 	struct j1939_sk_buff_cb *skcb;
 	struct sk_buff *skb;
 	struct net_device *dev;
 	int ifindex;
 	int ret;
 
+	/* various socket state tests */
 	if (!(jsk->state & JSK_BOUND))
-		return -ENOTCONN;
-
-	if (msg->msg_name && (msg->msg_namelen <
-			required_size(can_addr.j1939, struct sockaddr_can)))
-		return -EINVAL;
-
-	if (msg->msg_name) {
-		struct sockaddr_can *addr = msg->msg_name;
-		if (msg->msg_namelen < required_size(can_addr.j1939, *addr))
-			return -EFAULT;
-		if (addr->can_family != AF_CAN)
-			return -EINVAL;
-		if (ifindex && addr->can_ifindex &&
-			(ifindex != addr->can_ifindex))
-			return -ENONET;
-		if (!ifindex)
-			/* take destination intf when intf not yet set */
-			ifindex = addr->can_ifindex;
-	}
+		return -EBADFD;
 
 	if (!ifindex)
-		return -EDESTADDRREQ;
+		return -EBADFD;
 
 	if (jsk->addr.sa == J1939_NO_ADDR && !jsk->addr.src)
 		/* no address assigned yet */
 		return -EBADFD;
+
+	/* deal with provided address info */
+	if (msg->msg_name) {
+		if (msg->msg_namelen < J1939_MIN_NAMELEN)
+			return -EINVAL;
+		if (addr->can_family != AF_CAN)
+			return -EINVAL;
+		if (addr->can_ifindex && (ifindex != addr->can_ifindex))
+			return -EBADFD;
+	}
 
 	dev = dev_get_by_index(&init_net, ifindex);
 	if (!dev)
