@@ -53,34 +53,16 @@ void put_j1939_ecu(struct j1939_ecu *ecu)
 	kref_put(&ecu->kref, cb_put_j1939_ecu);
 }
 
-struct j1939_ecu *j1939_ecu_get_register(name_t name, int ifindex, int flags,
-		int return_existing)
+struct j1939_ecu *_j1939_ecu_get_register(struct j1939_priv *priv, name_t name,
+		int create_if_necessary)
 {
-	struct j1939_priv *parent;
 	struct j1939_ecu *ecu, *dut;
 
-	if (!ifindex || !name) {
-		pr_alert("%s(%i, %016llx) invalid\n",
-				__func__, ifindex, (long long)name);
-		return ERR_PTR(-EINVAL);
-	}
-
-	parent = j1939_priv_find(ifindex);
-	if (!parent) {
-		pr_alert("%s %i: segment not found\n", __func__, ifindex);
-		return ERR_PTR(-EINVAL);
-	}
-	if (return_existing) {
-		read_lock_bh(&parent->lock);
-		/* test for existing name */
-		list_for_each_entry(dut, &parent->ecus, list) {
-			if (dut->name == name) {
-				get_j1939_ecu(dut);
-				read_unlock_bh(&parent->lock);
-				return dut;
-			}
-		}
-		read_unlock_bh(&parent->lock);
+	/* find existing */
+	/* test for existing name */
+	list_for_each_entry(dut, &priv->ecus, list) {
+		if (dut->name == name)
+			return dut;
 	}
 	/* alloc */
 	ecu = kzalloc(sizeof(*ecu), gfp_any());
@@ -90,50 +72,29 @@ struct j1939_ecu *j1939_ecu_get_register(name_t name, int ifindex, int flags,
 	kref_init(&ecu->kref);
 	ecu->sa = J1939_IDLE_ADDR;
 	ecu->name = name;
-	ecu->flags = flags;
 
 	hrtimer_init(&ecu->ac_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	ecu->ac_timer.function = j1939_ecu_timer_handler;
 	INIT_LIST_HEAD(&ecu->list);
 
 	/* first add to internal list */
-	write_lock_bh(&parent->lock);
-	/* test for duplicate name */
-	list_for_each_entry(dut, &parent->ecus, list) {
-		if (dut->name == ecu->name)
-			goto duplicate;
-	}
-	get_j1939_ecu(ecu);
-	/* a ref to parent is held */
-	ecu->parent = parent;
-	list_add_tail(&ecu->list, &parent->ecus);
-	write_unlock_bh(&parent->lock);
-	ecu_dbg(ecu, "register\n");
-	return ecu;
+	/* a ref to priv is held */
+	ecu->parent = priv;
+	list_add_tail(&ecu->list, &priv->ecus);
 
-duplicate:
-	get_j1939_ecu(dut);
-	write_unlock_bh(&parent->lock);
-	put_j1939_priv(parent);
-	if (return_existing)
-		return dut;
-	ecu_alert(ecu, "duplicate name\n");
-	put_j1939_ecu(ecu);
-	return ERR_PTR(-EEXIST);
+	ecu_dbg(ecu, "register\n");
+	/* do not put_j1939_priv, a new ECU keeps a refcnt open */
+	return ecu;
 }
 
-void j1939_ecu_unregister(struct j1939_ecu *ecu)
+void _j1939_ecu_unregister(struct j1939_ecu *ecu)
 {
 	BUG_ON(!ecu);
 	ecu_dbg(ecu, "unregister\n");
 	hrtimer_try_to_cancel(&ecu->ac_timer);
 
-	write_lock_bh(&ecu->parent->lock);
-	j1939_ecu_remove_sa_locked(ecu);
+	_j1939_ecu_remove_sa(ecu);
 	list_del_init(&ecu->list);
-	write_unlock_bh(&ecu->parent->lock);
-	/* put segment, reverting the effect done by ..._register() */
-	put_j1939_priv(ecu->parent);
 	put_j1939_ecu(ecu);
 }
 
@@ -159,72 +120,28 @@ struct j1939_ecu *j1939_ecu_find_by_addr(int sa, int ifindex)
 int j1939_name_to_sa(uint64_t name, int ifindex)
 {
 	struct j1939_ecu *ecu;
-	struct j1939_priv *parent;
+	struct j1939_priv *priv;
 	int sa;
 
 	if (!name)
-		return J1939_IDLE_ADDR;
-	parent = j1939_priv_find(ifindex);
-	if (!parent)
-		return J1939_IDLE_ADDR;
+		return J1939_NO_ADDR;
+	priv = j1939_priv_find(ifindex);
+	if (!priv)
+		return J1939_NO_ADDR;
 
 	sa = J1939_IDLE_ADDR;
-	read_lock_bh(&parent->lock);
-	list_for_each_entry(ecu, &parent->ecus, list) {
+	read_lock_bh(&priv->lock);
+	list_for_each_entry(ecu, &priv->ecus, list) {
 		if (ecu->name == name) {
-			if ((sa == J1939_IDLE_ADDR) &&
-			    (parent->ents[ecu->sa].ecu == ecu))
+			if (priv->ents[ecu->sa].ecu == ecu)
 				/* ecu's SA is registered */
 				sa = ecu->sa;
 			break;
 		}
 	}
-	read_unlock_bh(&parent->lock);
-	put_j1939_priv(parent);
+	read_unlock_bh(&priv->lock);
+	put_j1939_priv(priv);
 	return sa;
-}
-
-struct j1939_ecu *j1939_ecu_find_priv_default_tx(int ifindex,
-		name_t *name, uint8_t *addr)
-{
-	struct j1939_ecu *ecu;
-	struct j1939_priv *parent;
-	struct addr_ent *paddr;
-	int j;
-
-	if (ifindex <= 0)
-		return ERR_PTR(-EINVAL);
-	parent = j1939_priv_find(ifindex);
-	if (!parent)
-		return ERR_PTR(-ENETUNREACH);
-	read_lock_bh(&parent->lock);
-	list_for_each_entry(ecu, &parent->ecus, list) {
-		if (ecu->flags & ECUFLAG_LOCAL) {
-			get_j1939_ecu(ecu);
-			if (name)
-				*name = ecu->name;
-			if (addr)
-				*addr = ecu->sa;
-			goto found;
-		}
-	}
-	ecu = NULL;
-	for (j = 0, paddr = parent->ents; j < J1939_IDLE_ADDR; ++j, ++paddr) {
-		if (paddr->ecu)
-			continue;
-		if (paddr->flags & ECUFLAG_LOCAL) {
-			if (name)
-				*name = 0;
-			if (addr)
-				*addr = j;
-			goto found;
-		}
-	}
-	ecu = ERR_PTR(-EHOSTDOWN);
-found:
-	read_unlock_bh(&parent->lock);
-	put_j1939_priv(parent);
-	return ecu;
 }
 
 /* ecu lookup helper */
@@ -251,32 +168,75 @@ struct j1939_ecu *j1939_ecu_find_by_name(name_t name, int ifindex)
 {
 	struct j1939_ecu *ecu;
 	struct j1939_priv *priv;
-	struct net_device *netdev;
 
 	if (!name)
 		return NULL;
-	if (ifindex) {
-		priv = j1939_priv_find(ifindex);
-		if (!priv)
-			return NULL;
-		ecu = _j1939_ecu_find_by_name(name, priv);
-		put_j1939_priv(priv);
-		return ecu;
-	}
-
-	/* iterate netdevices */
-	rcu_read_lock();
-	for_each_netdev_rcu(&init_net, netdev) {
-		priv = dev_j1939_priv(netdev);
-		if (!priv)
-			continue;
-		ecu = _j1939_ecu_find_by_name(name, priv);
-		put_j1939_priv(priv);
-		if (ecu)
-			goto found;
-	}
-	rcu_read_unlock();
-	ecu = NULL;
-found:
+	if (!ifindex)
+		return NULL;
+	priv = j1939_priv_find(ifindex);
+	if (!priv)
+		return NULL;
+	ecu = _j1939_ecu_find_by_name(name, priv);
+	put_j1939_priv(priv);
 	return ecu;
 }
+
+/* TX addr/name accounting
+ * Transport protocol needs to know if a SA is local or not
+ * These functions originate from userspace manipulating sockets,
+ * so locking is straigforward
+ */
+void j1939_addr_local_get(struct j1939_priv *priv, int sa)
+{
+	if (!j1939_address_is_unicast(sa))
+		return;
+	write_lock_bh(&priv->lock);
+	++priv->ents[sa].nusers;
+	write_unlock_bh(&priv->lock);
+}
+
+void j1939_addr_local_put(struct j1939_priv *priv, int sa)
+{
+	if (!j1939_address_is_unicast(sa))
+		return;
+	write_lock_bh(&priv->lock);
+	--priv->ents[sa].nusers;
+	write_unlock_bh(&priv->lock);
+}
+
+void j1939_name_local_get(struct j1939_priv *priv, uint64_t name)
+{
+	struct j1939_ecu *ecu;
+
+	if (!name)
+		return;
+	write_lock_bh(&priv->lock);
+	ecu = _j1939_ecu_get_register(priv, name, 1);
+	if (!IS_ERR(ecu)) {
+		get_j1939_ecu(ecu);
+		++ecu->nusers;
+		if (priv->ents[ecu->sa].ecu == ecu)
+			/* ecu's sa is active already */
+			++priv->ents[ecu->sa].nusers;
+	}
+	write_unlock_bh(&priv->lock);
+}
+
+void j1939_name_local_put(struct j1939_priv *priv, uint64_t name)
+{
+	struct j1939_ecu *ecu;
+
+	if (!name)
+		return;
+	write_lock_bh(&priv->lock);
+	ecu = _j1939_ecu_get_register(priv, name, 0);
+	if (!IS_ERR(ecu)) {
+		--ecu->nusers;
+		if (priv->ents[ecu->sa].ecu == ecu)
+			/* ecu's sa is active already */
+			--priv->ents[ecu->sa].nusers;
+		put_j1939_ecu(ecu);
+	}
+	write_unlock_bh(&priv->lock);
+}
+

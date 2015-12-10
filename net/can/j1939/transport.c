@@ -220,7 +220,7 @@ static inline int j1939tp_im_receiver(struct sk_buff *skb)
 {
 	struct j1939_sk_buff_cb *cb = (void *)skb->cb;
 
-	return cb->dstflags & ECUFLAG_LOCAL;
+	return cb->dstflags & ECU_LOCAL;
 }
 
 /* see if we are sender */
@@ -228,21 +228,20 @@ static inline int j1939tp_im_transmitter(struct sk_buff *skb)
 {
 	struct j1939_sk_buff_cb *cb = (void *)skb->cb;
 
-	return cb->srcflags & ECUFLAG_LOCAL;
+	return cb->srcflags & ECU_LOCAL;
 }
 
 /* see if we are involved as either receiver or transmitter */
-/* reverse = -1 means : any direction */
-static int j1939tp_im_involved(struct sk_buff *skb, int reverse)
+static int j1939tp_im_involved(struct sk_buff *skb, int swap)
+{
+	return swap ? j1939tp_im_receiver(skb) : j1939tp_im_transmitter(skb);
+}
+
+static int j1939tp_im_involved_anydir(struct sk_buff *skb)
 {
 	struct j1939_sk_buff_cb *cb = (void *)skb->cb;
 
-	if (reverse < 0)
-		return (cb->srcflags | cb->dstflags) & ECUFLAG_LOCAL;
-	else if (reverse)
-		return cb->dstflags & ECUFLAG_LOCAL;
-	else
-		return cb->srcflags & ECUFLAG_LOCAL;
+	return (cb->srcflags | cb->dstflags) & ECU_LOCAL;
 }
 
 /* extract pgn from flow-ctl message */
@@ -384,7 +383,7 @@ static int j1939tp_tx_dat(struct sk_buff *related, int extd,
 
 	skdat = skb_put(skb, len);
 	memcpy(skdat, dat, len);
-	return j1939_send_can(skb);
+	return j1939_send(skb);
 }
 
 static int j1939xtp_do_tx_ctl(struct sk_buff *related, int extd,
@@ -425,7 +424,7 @@ static int j1939xtp_do_tx_ctl(struct sk_buff *related, int extd,
 	skdat[6] = (pgn >>  8) & 0xff;
 	skdat[5] = (pgn >>  0) & 0xff;
 
-	return j1939_send_can(skb);
+	return j1939_send(skb);
 }
 
 static inline int j1939tp_tx_ctl(struct session *session,
@@ -505,11 +504,11 @@ static inline void j1939session_completed(struct session *session)
 
 static void j1939session_cancel(struct session *session, int err)
 {
-	if ((err >= 0) && j1939tp_im_involved(session->skb, -1)) {
+	if ((err >= 0) && j1939tp_im_involved_anydir(session->skb)) {
 		if (!j1939cb_is_broadcast(session->cb)) {
 			/* do not send aborts on incoming broadcasts */
 			j1939xtp_tx_abort(session->skb, session->extd,
-				!(session->cb->srcflags & ECUFLAG_LOCAL),
+				!(session->cb->srcflags & ECU_LOCAL),
 				err, session->cb->pgn);
 		}
 	}
@@ -1136,6 +1135,7 @@ int j1939_send_transport(struct sk_buff *skb)
 	struct j1939_sk_buff_cb *cb = (void *)skb->cb;
 	struct session *session;
 	int ret;
+	struct j1939_priv *priv;
 
 	if ((tp_pgn_dat == cb->pgn) || (tp_pgn_ctl == cb->pgn) ||
 	    (etp_pgn_dat == cb->pgn) || (etp_pgn_ctl == cb->pgn))
@@ -1149,6 +1149,23 @@ int j1939_send_transport(struct sk_buff *skb)
 		if (j1939cb_is_broadcast(cb))
 			return -EDESTADDRREQ;
 	}
+
+	/* fill in addresses from names */
+	ret = j1939_fixup_address_claim(skb);
+	if (unlikely(ret))
+		goto failed;
+
+	/* fix dstflags, it may be used there soon */
+	priv = j1939_priv_find(can_skb_prv(skb)->ifindex);
+	if (!priv)
+		return -EINVAL;
+	if (j1939_address_is_valid(cb->dstaddr) ||
+			(j1939_address_is_unicast(cb->dstaddr) &&
+				priv->ents[cb->dstaddr].nusers))
+		cb->dstflags |= ECU_LOCAL;
+	put_j1939_priv(priv);
+	/* src is always local, I'm sending ... */
+	cb->srcflags |= ECU_LOCAL;
 
 	/* prepare new session */
 	session = j1939session_new(skb);
