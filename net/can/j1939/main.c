@@ -474,18 +474,6 @@ fail_sk:
 
 static __exit void j1939_module_exit(void)
 {
-	struct net_device *netdev;
-
-	/* shutdown j1939 for all netdevs */
-	rcu_read_lock();
-	for_each_netdev_rcu(&init_net, netdev) {
-		if (netdev->type != ARPHRD_CAN)
-			continue;
-		/* netdev disable only disables when j1939 active */
-		j1939_netdev_stop(netdev);
-	}
-	rcu_read_unlock();
-
 	remove_proc_entry("name", j1939_procdir);
 	remove_proc_entry("addr", j1939_procdir);
 	j1939tp_module_exit();
