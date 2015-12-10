@@ -340,7 +340,6 @@ static int j1939sk_connect(struct socket *sock, struct sockaddr *uaddr,
 	int ret;
 	struct sockaddr_can *addr = (struct sockaddr_can *)uaddr;
 	struct j1939_sock *jsk = j1939_sk(sock->sk);
-	struct j1939_ecu *ecu;
 	struct j1939_priv *priv;
 	int bound_dev_if;
 
@@ -384,8 +383,8 @@ static int j1939sk_connect(struct socket *sock, struct sockaddr *uaddr,
 	}
 
 	/* lookup destination */
-	jsk->addr.dst = ecu->name;
-	jsk->addr.da = ecu->sa;
+	jsk->addr.dst = addr->can_addr.j1939.name;
+	jsk->addr.da = addr->can_addr.j1939.addr;
 
 	/* start assigning, no problem can occur at this point anymore */
 	jsk->sk.sk_bound_dev_if = bound_dev_if;
