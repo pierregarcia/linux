@@ -675,6 +675,7 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 	if (!(jsk->state & JSK_BOUND))
 		return -EBADFD;
 
+	ifindex = jsk->ifindex_started;
 	if (!ifindex)
 		return -EBADFD;
 
