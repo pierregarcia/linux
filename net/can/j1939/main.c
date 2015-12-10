@@ -54,11 +54,11 @@ static void j1939_can_recv(struct sk_buff *iskb, void *data)
 {
 	struct j1939_priv *priv = data;
 	struct sk_buff *skb;
-	struct j1939_sk_buff_cb *sk_addr;
+	struct j1939_sk_buff_cb *skcb;
 	struct can_frame *cf;
 	struct addr_ent *paddr;
 
-	BUILD_BUG_ON(sizeof(*sk_addr) > sizeof(skb->cb));
+	BUILD_BUG_ON(sizeof(*skcb) > sizeof(skb->cb));
 
 	if (!priv)
 		return;
@@ -80,42 +80,42 @@ static void j1939_can_recv(struct sk_buff *iskb, void *data)
 	skb_trim(skb, min_t(uint8_t, cf->can_dlc, 8));
 
 	/* set addr */
-	sk_addr = (struct j1939_sk_buff_cb *)skb->cb;
-	memset(sk_addr, 0, sizeof(*sk_addr));
+	skcb = (struct j1939_sk_buff_cb *)skb->cb;
+	memset(skcb, 0, sizeof(*skcb));
 	/* save incoming socket, without assigning the skb to it */
-	sk_addr->insock = iskb->sk;
-	sk_addr->priority = (cf->can_id & 0x1c000000) >> 26;
-	sk_addr->srcaddr = cf->can_id & 0xff;
-	sk_addr->pgn = (cf->can_id & 0x3ffff00) >> 8;
-	if (pgn_is_pdu1(sk_addr->pgn)) {
+	skcb->insock = iskb->sk;
+	skcb->priority = (cf->can_id & 0x1c000000) >> 26;
+	skcb->srcaddr = cf->can_id & 0xff;
+	skcb->pgn = (cf->can_id & 0x3ffff00) >> 8;
+	if (pgn_is_pdu1(skcb->pgn)) {
 		/* Type 1: with destination address */
-		sk_addr->dstaddr = sk_addr->pgn & 0xff;
+		skcb->dstaddr = skcb->pgn & 0xff;
 		/* normalize pgn: strip dst address */
-		sk_addr->pgn &= 0x3ff00;
+		skcb->pgn &= 0x3ff00;
 	} else {
 		/* set broadcast address */
-		sk_addr->dstaddr = J1939_NO_ADDR;
+		skcb->dstaddr = J1939_NO_ADDR;
 	}
 
 	/* update local rxtime cache */
 	write_lock_bh(&priv->lock);
-	if (j1939_address_is_unicast(sk_addr->srcaddr)) {
-		paddr = &priv->ents[sk_addr->srcaddr];
+	if (j1939_address_is_unicast(skcb->srcaddr)) {
+		paddr = &priv->ents[skcb->srcaddr];
 		paddr->rxtime = ktime_get();
-		if (paddr->ecu && sk_addr->pgn != 0x0ee00)
+		if (paddr->ecu && skcb->pgn != 0x0ee00)
 			paddr->ecu->rxtime = paddr->rxtime;
 	}
 	write_unlock_bh(&priv->lock);
 
 	/* update localflags */
 	read_lock_bh(&priv->lock);
-	if (j1939_address_is_unicast(sk_addr->srcaddr) &&
-			priv->ents[sk_addr->srcaddr].nusers)
-		sk_addr->srcflags |= ECU_LOCAL;
-	if (j1939_address_is_valid(sk_addr->dstaddr) ||
-			(j1939_address_is_unicast(sk_addr->dstaddr) &&
-				priv->ents[sk_addr->dstaddr].nusers))
-		sk_addr->dstflags |= ECU_LOCAL;
+	if (j1939_address_is_unicast(skcb->srcaddr) &&
+			priv->ents[skcb->srcaddr].nusers)
+		skcb->srcflags |= ECU_LOCAL;
+	if (j1939_address_is_valid(skcb->dstaddr) ||
+			(j1939_address_is_unicast(skcb->dstaddr) &&
+				priv->ents[skcb->dstaddr].nusers))
+		skcb->dstflags |= ECU_LOCAL;
 	read_unlock_bh(&priv->lock);
 
 	/* deliver into the j1939 stack ... */
@@ -133,7 +133,7 @@ int j1939_send(struct sk_buff *skb)
 {
 	int ret, dlc;
 	canid_t canid;
-	struct j1939_sk_buff_cb *sk_addr = (struct j1939_sk_buff_cb *)skb->cb;
+	struct j1939_sk_buff_cb *skcb = (struct j1939_sk_buff_cb *)skb->cb;
 	struct can_frame *cf;
 
 	if (skb->len > 8)
@@ -141,9 +141,9 @@ int j1939_send(struct sk_buff *skb)
 		return j1939_send_transport(skb);
 
 	/* apply sanity checks */
-	sk_addr->pgn &= (pgn_is_pdu1(sk_addr->pgn)) ? 0x3ff00 : 0x3ffff;
-	if (sk_addr->priority > 7)
-		sk_addr->priority = 6;
+	skcb->pgn &= (pgn_is_pdu1(skcb->pgn)) ? 0x3ff00 : 0x3ffff;
+	if (skcb->priority > 7)
+		skcb->priority = 6;
 
 	ret = j1939_fixup_address_claim(skb);
 	if (unlikely(ret))
@@ -161,13 +161,13 @@ int j1939_send(struct sk_buff *skb)
 	skb_put(skb, CAN_FTR + (8 - dlc));
 
 	canid = CAN_EFF_FLAG |
-		(sk_addr->srcaddr & 0xff) |
-		((sk_addr->priority & 0x7) << 26);
-	if (pgn_is_pdu1(sk_addr->pgn))
-		canid |= ((sk_addr->pgn & 0x3ff00) << 8) |
-			((sk_addr->dstaddr & 0xff) << 8);
+		(skcb->srcaddr & 0xff) |
+		((skcb->priority & 0x7) << 26);
+	if (pgn_is_pdu1(skcb->pgn))
+		canid |= ((skcb->pgn & 0x3ff00) << 8) |
+			((skcb->dstaddr & 0xff) << 8);
 	else
-		canid |= ((sk_addr->pgn & 0x3ffff) << 8);
+		canid |= ((skcb->pgn & 0x3ffff) << 8);
 
 	cf->can_id = canid;
 	if (padding) {
