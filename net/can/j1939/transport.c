@@ -1400,7 +1400,7 @@ static const struct file_operations j1939tp_proc_ops = {
 /* module init */
 int __init j1939tp_module_init(void)
 {
-	if (!proc_create("transport", 0400, j1939_procdir, &j1939tp_proc_ops))
+	if (!proc_create("transport", 0444, j1939_procdir, &j1939tp_proc_ops))
 		return -ENOMEM;
 	return 0;
 }
