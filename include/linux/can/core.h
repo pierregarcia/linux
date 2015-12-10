@@ -39,27 +39,6 @@ struct can_proto {
 	int protocol;
 	const struct proto_ops *ops;
 	struct proto *prot;
-	const struct rtnl_af_ops *rtnl_link_ops;
-	/*
-	 * hooks for rtnl hooks
-	 * for the *dump* functions, cb->args[0] is reserved
-	 * for use by af_can.c, so keep your fingers off.
-	 */
-	rtnl_doit_func rtnl_new_addr;
-	rtnl_doit_func rtnl_del_addr;
-	rtnl_dumpit_func rtnl_dump_addr;
-};
-
-/*
- * this is quite a dirty hack:
- * reuse the second byte of a rtnetlink msg
- * to indicate the precise protocol.
- * The major problem is that is may conflict
- * with the prefixlen in struct ifaddrmsg.
- */
-struct rtgencanmsg {
-	unsigned char rtgen_family;
-	unsigned char can_protocol;
 };
 
 /*

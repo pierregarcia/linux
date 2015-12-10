@@ -86,10 +86,6 @@ int j1939_fixup_address_claim(struct sk_buff *skb)
 				skb->dev->ifindex);
 		if (!ecu)
 			return -ENODEV;
-		if (!(ecu->flags & ECUFLAG_LOCAL)) {
-			put_j1939_ecu(ecu);
-			return -EREMOTE;
-		}
 
 		if (ecu->sa != sk_addr->srcaddr)
 			/* hold further traffic for ecu, remove from parent */
@@ -120,76 +116,75 @@ int j1939_fixup_address_claim(struct sk_buff *skb)
 	return 0;
 }
 
-static struct j1939_ecu *j1939_process_address_claim(struct sk_buff *skb)
+static void j1939_process_address_claim(struct sk_buff *skb)
 {
 	struct j1939_sk_buff_cb *sk_addr = (void *)skb->cb;
-	struct j1939_ecu *ecu, *dut, **pref;
+	struct j1939_ecu *ecu, *prev;
+	struct j1939_priv *priv;
 	name_t name;
 
-	if (skb->len < 8) {
+	if (skb->len != 8) {
 		j1939_notice("rx address claim with wrong dlc %i\n", skb->len);
-		return ERR_PTR(-EPROTO);
+		return;
 	}
 
 	name = CANDATA2NAME(skb->data);
+	sk_addr->srcname = name;
 	if (!name) {
 		j1939_notice("rx address claim without name\n");
-		return ERR_PTR(-EPROTO);
+		return;
 	}
 
 	if (!j1939_address_is_valid(sk_addr->srcaddr)) {
 		j1939_notice("rx address claim with broadcast sa\n");
-		return ERR_PTR(-EPROTO);
+		return;
 	}
 
-	ecu = j1939_ecu_get_register(name, skb->skb_iif, ECUFLAG_REMOTE, 1);
+	priv = j1939_priv_find(skb->skb_iif);
+	if (!priv)
+		return;
+
+	write_lock_bh(&priv->lock);
+
+	ecu = _j1939_ecu_get_register(priv, name,
+			j1939_address_is_unicast(sk_addr->srcaddr));
 	if (IS_ERR(ecu))
-		return ecu;
-	if ((ecu->flags & ECUFLAG_LOCAL) && !sk_addr->insock)
-		j1939_warning("duplicate name on the bus %016llx!\n",
-				(long long)name);
+		goto done;
 
 	if (sk_addr->srcaddr >= J1939_IDLE_ADDR) {
-		j1939_ecu_remove_sa(ecu);
-		if (ecu->flags & ECUFLAG_REMOTE)
-			/* extra put => schedule removal */
-			j1939_ecu_unregister(ecu);
-		return ecu;
+		_j1939_ecu_unregister(ecu);
+		goto done;
 	}
 
-	write_lock_bh(&ecu->parent->lock);
 	/* save new SA */
 	if (sk_addr->srcaddr != ecu->sa)
-		j1939_ecu_remove_sa_locked(ecu);
+		_j1939_ecu_remove_sa(ecu);
+	/* cancel pending (previous) address claim */
+	hrtimer_try_to_cancel(&ecu->ac_timer);
 	ecu->sa = sk_addr->srcaddr;
-	/* iterate this segment */
-	list_for_each_entry(dut, &ecu->parent->ecus, list) {
-		/* cancel pending claims for this SA */
-		/* this includes myself ! */
-		if (ecu->sa == dut->sa)
-			/*
-			 * cancel pending claims for our new SA
-			 * this includes 'ecu', since we will
-			 * schedule a timer soon now
-			 */
-			hrtimer_try_to_cancel(&dut->ac_timer);
-		if ((ecu->sa == dut->sa) && (dut->name > ecu->name))
-			dut->sa = J1939_IDLE_ADDR;
-	}
 
-	pref = &ecu->parent->ents[sk_addr->srcaddr].ecu;
-	if (*pref && ((*pref)->name > ecu->name))
-		*pref = NULL;
+	prev = priv->ents[sk_addr->srcaddr].ecu;
+	if (prev && prev != ecu) {
+		if (ecu->name > prev->name) {
+			_j1939_ecu_unregister(ecu);
+			goto done;
+		} else {
+			/* kick prev */
+			_j1939_ecu_unregister(prev);
+		}
+	}
 
 	/* schedule timer in 250 msec to commit address change */
 	hrtimer_start(&ecu->ac_timer, ktime_set(0, 250000000),
 			HRTIMER_MODE_REL);
-	write_unlock_bh(&ecu->parent->lock);
-
-	return ecu;
+	/* rxtime administration */
+	ecu->rxtime = ktime_get();
+done:
+	write_unlock_bh(&priv->lock);
+	put_j1939_priv(priv);
 }
 
-int j1939_recv_address_claim(struct sk_buff *skb)
+void j1939_recv_address_claim(struct sk_buff *skb, struct j1939_priv *priv)
 {
 	struct j1939_sk_buff_cb *sk_addr = (void *)skb->cb;
 	struct j1939_ecu *ecu;
@@ -197,30 +192,23 @@ int j1939_recv_address_claim(struct sk_buff *skb)
 	/*
 	 * network mgmt
 	 */
-	if (sk_addr->pgn == PGN_ADDRESS_CLAIMED) {
-		ecu = j1939_process_address_claim(skb);
-		if (IS_ERR(ecu))
-			return PTR_ERR(ecu);
-	} else if (j1939_address_is_unicast(sk_addr->srcaddr)) {
+	if (sk_addr->pgn == PGN_ADDRESS_CLAIMED)
+		j1939_process_address_claim(skb);
+	else if (j1939_address_is_unicast(sk_addr->srcaddr)) {
 		ecu = j1939_ecu_find_by_addr(sk_addr->srcaddr, skb->skb_iif);
-	} else {
-		ecu = NULL;
+		if (ecu) {
+			/* source administration */
+			ecu->rxtime = ktime_get();
+			sk_addr->srcname = ecu->name;
+			put_j1939_ecu(ecu);
+		}
 	}
 
-	/* assign source stuff */
-	if (ecu) {
-		ecu->rxtime = ktime_get();
-		sk_addr->srcflags = ecu->flags;
-		sk_addr->srcname = ecu->name;
-		put_j1939_ecu(ecu);
-	}
 	/* assign destination stuff */
 	ecu = j1939_ecu_find_by_addr(sk_addr->dstaddr, skb->skb_iif);
 	if (ecu) {
-		sk_addr->dstflags = ecu->flags;
 		sk_addr->dstname = ecu->name;
 		put_j1939_ecu(ecu);
 	}
-	return 0;
 }
 

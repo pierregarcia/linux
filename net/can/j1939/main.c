@@ -49,48 +49,19 @@ module_param_named(padding, padding, uint, 0644);
 
 MODULE_PARM_DESC(padding, "Pad all packets to 8 bytes, and stuff with 0xff");
 
-static void j1939_recv_ecu_flags(struct sk_buff *skb, void *data)
-{
-	struct j1939_priv *priv = data;
-	struct j1939_sk_buff_cb *cb = (void *)skb->cb;
-	struct addr_ent *paddr;
-
-	if (!priv)
-		return;
-	write_lock_bh(&priv->lock);
-	if (j1939_address_is_unicast(cb->srcaddr)) {
-		paddr = &priv->ents[cb->srcaddr];
-		paddr->rxtime = ktime_get();
-		if (0x0ee00 == cb->pgn) {
-			/* do not touch many things for Address claims */
-		} else if (paddr->ecu) {
-			paddr->ecu->rxtime = paddr->rxtime;
-			cb->srcflags = paddr->ecu->flags;
-		} else {
-			if (!paddr->flags)
-				paddr->flags |= ECUFLAG_REMOTE;
-			cb->srcflags = paddr->flags;
-		}
-	}
-
-	if (j1939_address_is_unicast(cb->dstaddr)) {
-		paddr = &priv->ents[cb->dstaddr];
-		if (paddr->ecu)
-			cb->dstflags = paddr->ecu->flags;
-		else
-			cb->dstflags = paddr->flags ?: ECUFLAG_REMOTE;
-	}
-	write_unlock_bh(&priv->lock);
-}
-
 /* lowest layer */
 static void j1939_can_recv(struct sk_buff *iskb, void *data)
 {
+	struct j1939_priv *priv = data;
 	struct sk_buff *skb;
 	struct j1939_sk_buff_cb *sk_addr;
 	struct can_frame *cf;
+	struct addr_ent *paddr;
 
 	BUILD_BUG_ON(sizeof(*sk_addr) > sizeof(skb->cb));
+
+	if (!priv)
+		return;
 
 	/* create a copy of the skb
 	 * j1939 only delivers the real data bytes,
@@ -125,12 +96,31 @@ static void j1939_can_recv(struct sk_buff *iskb, void *data)
 		/* set broadcast address */
 		sk_addr->dstaddr = J1939_NO_ADDR;
 	}
-	j1939_recv_ecu_flags(skb, data);
 
-	if (j1939_recv_address_claim(skb))
-		goto done;
-	if (j1939_recv_promisc(skb))
-		goto done;
+	/* update local rxtime cache */
+	write_lock_bh(&priv->lock);
+	if (j1939_address_is_unicast(sk_addr->srcaddr)) {
+		paddr = &priv->ents[sk_addr->srcaddr];
+		paddr->rxtime = ktime_get();
+		if (paddr->ecu && sk_addr->pgn != 0x0ee00)
+			paddr->ecu->rxtime = paddr->rxtime;
+	}
+	write_unlock_bh(&priv->lock);
+
+	/* update localflags */
+	read_lock_bh(&priv->lock);
+	if (j1939_address_is_unicast(sk_addr->srcaddr) &&
+			priv->ents[sk_addr->srcaddr].nusers)
+		sk_addr->srcflags |= ECU_LOCAL;
+	if (j1939_address_is_valid(sk_addr->dstaddr) ||
+			(j1939_address_is_unicast(sk_addr->dstaddr) &&
+				priv->ents[sk_addr->dstaddr].nusers))
+		sk_addr->dstflags |= ECU_LOCAL;
+	read_unlock_bh(&priv->lock);
+
+	/* deliver into the j1939 stack ... */
+	j1939_recv_address_claim(skb, priv);
+
 	if (j1939_recv_transport(skb))
 		/* this means the transport layer processed the message */
 		goto done;
@@ -139,12 +129,21 @@ done:
 	kfree_skb(skb);
 }
 
-int j1939_send_can(struct sk_buff *skb)
+int j1939_send(struct sk_buff *skb)
 {
 	int ret, dlc;
 	canid_t canid;
-	struct j1939_sk_buff_cb *sk_addr;
+	struct j1939_sk_buff_cb *sk_addr = (struct j1939_sk_buff_cb *)skb->cb;
 	struct can_frame *cf;
+
+	if (skb->len > 8)
+		/* re-route via transport protocol */
+		return j1939_send_transport(skb);
+
+	/* apply sanity checks */
+	sk_addr->pgn &= (pgn_is_pdu1(sk_addr->pgn)) ? 0x3ff00 : 0x3ffff;
+	if (sk_addr->priority > 7)
+		sk_addr->priority = 6;
 
 	ret = j1939_fixup_address_claim(skb);
 	if (unlikely(ret))
@@ -161,7 +160,6 @@ int j1939_send_can(struct sk_buff *skb)
 	/* make it a full can frame again */
 	skb_put(skb, CAN_FTR + (8 - dlc));
 
-	sk_addr = (struct j1939_sk_buff_cb *)skb->cb;
 	canid = CAN_EFF_FLAG |
 		(sk_addr->srcaddr & 0xff) |
 		((sk_addr->priority & 0x7) << 26);
@@ -183,75 +181,6 @@ failed:
 	consume_skb(skb);
 	return ret;
 }
-
-int j1939_send(struct sk_buff *skb)
-{
-	struct j1939_sk_buff_cb *cb = (void *)skb->cb;
-	struct j1939_priv *priv;
-	struct j1939_ecu *ecu;
-	int ret = 0;
-
-	/* apply sanity checks */
-	cb->pgn &= (pgn_is_pdu1(cb->pgn)) ? 0x3ff00 : 0x3ffff;
-	if (cb->priority > 7)
-		cb->priority = 6;
-
-	/* verify source */
-	priv = dev_j1939_priv(skb->dev);
-	if (!priv)
-		return -ENETUNREACH;
-
-	read_lock_bh(&priv->lock);
-	/* verify source */
-	if (cb->srcname) {
-		ecu = j1939_ecu_find_by_name(cb->srcname, skb->dev->ifindex);
-		if (ecu) {
-			cb->srcflags = ecu->flags;
-			put_j1939_ecu(ecu);
-		}
-	} else if (j1939_address_is_unicast(cb->srcaddr))
-		cb->srcflags = priv->ents[cb->srcaddr].flags;
-	else if (cb->srcaddr == J1939_IDLE_ADDR)
-		/* allow always */
-		cb->srcflags = ECUFLAG_LOCAL;
-	else
-		cb->srcflags = 0;
-
-	if (cb->srcflags & ECUFLAG_REMOTE) {
-		ret = -EREMOTE;
-		goto done;
-	} else if (!(cb->srcflags & ECUFLAG_LOCAL)) {
-		ret = -EADDRNOTAVAIL;
-		goto done;
-	}
-
-	/* verify destination */
-	if (cb->dstname) {
-		ecu = j1939_ecu_find_by_name(cb->dstname, skb->dev->ifindex);
-		if (!ecu) {
-			ret = -EADDRNOTAVAIL;
-			goto done;
-		}
-		cb->dstflags = ecu->flags;
-		put_j1939_ecu(ecu);
-	} else if (j1939_address_is_unicast(cb->dstaddr)) {
-		cb->dstflags = priv->ents[cb->dstaddr].flags;
-	} else if (cb->dstaddr == J1939_IDLE_ADDR) {
-		/* not a valid destination */
-		ret = -EADDRNOTAVAIL;
-		goto done;
-	} else
-		cb->dstflags = 0;
-
-	if (skb->len > 8)
-		ret = j1939_send_transport(skb);
-	else
-		ret = j1939_send_can(skb);
-done:
-	read_unlock_bh(&priv->lock);
-	put_j1939_priv(priv);
-	return ret;
-}
 EXPORT_SYMBOL_GPL(j1939_send);
 
 /*
@@ -269,8 +198,10 @@ static void j1939_priv_ac_task(unsigned long val)
 		if (!atomic_read(&ecu->ac_delay_expired))
 			continue;
 		atomic_set(&ecu->ac_delay_expired, 0);
-		if (j1939_address_is_unicast(ecu->sa))
+		if (j1939_address_is_unicast(ecu->sa)) {
 			ecu->parent->ents[ecu->sa].ecu = ecu;
+			ecu->parent->ents[ecu->sa].nusers += ecu->nusers;
+		}
 	}
 	write_unlock_bh(&priv->lock);
 }
@@ -382,9 +313,7 @@ static void on_put_j1939_priv(struct kref *kref)
 	write_lock_bh(&priv->lock);
 	while (!list_empty(&priv->ecus)) {
 		ecu = list_first_entry(&priv->ecus, struct j1939_ecu, list);
-		write_unlock_bh(&priv->lock);
-		j1939_ecu_unregister(ecu);
-		write_lock_bh(&priv->lock);
+		_j1939_ecu_unregister(ecu);
 	}
 	write_unlock_bh(&priv->lock);
 	kfree(priv);

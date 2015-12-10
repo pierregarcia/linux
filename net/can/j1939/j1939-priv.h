@@ -26,9 +26,6 @@
 
 /* TODO: return ENETRESET on busoff. */
 
-#define ECUFLAG_LOCAL	0x01
-#define ECUFLAG_REMOTE	0x02
-
 #define PGN_REQUEST		0x0ea00
 #define PGN_ADDRESS_CLAIMED	0x0ee00
 #define PGN_MAX			0x3ffff
@@ -41,7 +38,6 @@ struct j1939_ecu {
 	struct list_head list;
 	ktime_t rxtime;
 	name_t name;
-	int flags;
 	uint8_t sa;
 	/*
 	 * atomic flag, set by ac_timer
@@ -55,6 +51,8 @@ struct j1939_ecu {
 	struct hrtimer ac_timer;
 	struct kref kref;
 	struct j1939_priv *parent;
+	/* count users, to help transport protocol decide for interaction */
+	int nusers;
 };
 #define to_j1939_ecu(x) container_of((x), struct j1939_ecu, dev)
 
@@ -78,7 +76,8 @@ struct j1939_priv {
 	struct addr_ent {
 		ktime_t rxtime;
 		struct j1939_ecu *ecu;
-		int flags;
+		/* count users, to help transport protocol */
+		int nusers;
 	} ents[256];
 
 	/*
@@ -112,6 +111,12 @@ static inline void get_j1939_priv(struct j1939_priv *dut)
 {
 	kref_get(&dut->kref);
 }
+
+/* keep the cache of what is local */
+extern void j1939_addr_local_get(struct j1939_priv *priv, int sa);
+extern void j1939_addr_local_put(struct j1939_priv *priv, int sa);
+extern void j1939_name_local_get(struct j1939_priv *priv, uint64_t name);
+extern void j1939_name_local_put(struct j1939_priv *priv, uint64_t name);
 
 /*
  * conversion function between (struct sock | struct sk_buff)->sk_priority
@@ -153,12 +158,14 @@ static inline int pgn_is_valid(pgn_t pgn)
 }
 
 /* utility to correctly unregister a SA */
-static inline void j1939_ecu_remove_sa_locked(struct j1939_ecu *ecu)
+static inline void _j1939_ecu_remove_sa(struct j1939_ecu *ecu)
 {
 	if (!j1939_address_is_unicast(ecu->sa))
 		return;
-	if (ecu->parent->ents[ecu->sa].ecu == ecu)
+	if (ecu->parent && ecu->parent->ents[ecu->sa].ecu == ecu) {
 		ecu->parent->ents[ecu->sa].ecu = NULL;
+		ecu->parent->ents[ecu->sa].nusers -= ecu->nusers;
+	}
 }
 
 static inline void j1939_ecu_remove_sa(struct j1939_ecu *ecu)
@@ -166,7 +173,7 @@ static inline void j1939_ecu_remove_sa(struct j1939_ecu *ecu)
 	if (!j1939_address_is_unicast(ecu->sa))
 		return;
 	write_lock_bh(&ecu->parent->lock);
-	j1939_ecu_remove_sa_locked(ecu);
+	_j1939_ecu_remove_sa(ecu);
 	write_unlock_bh(&ecu->parent->lock);
 }
 
@@ -176,9 +183,6 @@ extern struct j1939_ecu *j1939_ecu_find_by_name(name_t name, int ifindex);
 /* find_by_name, with kref & read_lock taken */
 extern struct j1939_ecu *j1939_ecu_find_priv_default_tx(
 		int ifindex, name_t *pname, uint8_t *paddr);
-
-extern void j1939_put_promisc_receiver(int ifindex);
-extern void j1939_get_promisc_receiver(int ifindex);
 
 extern struct proc_dir_entry *j1939_procdir;
 extern const char j1939_procname[];
@@ -206,8 +210,13 @@ struct j1939_sk_buff_cb {
 	uint8_t dstaddr;
 	name_t srcname;
 	name_t dstname;
-	int srcflags, dstflags;
 
+	/*
+	 * Flags for quick lookups during skb processing
+	 * These are set in the receive path only
+	 */
+	int srcflags, dstflags;
+	#define ECU_LOCAL	1
 	/* for tx, MSG_SYN will be used to sync on sockets */
 	int msg_flags;
 	/* j1939 clones incoming skb's.
@@ -216,6 +225,7 @@ struct j1939_sk_buff_cb {
 	 */
 	struct sock *insock;
 };
+
 #define J1939_MSG_RESERVED	MSG_SYN
 #define J1939_MSG_SYNC		MSG_SYN
 
@@ -225,31 +235,24 @@ static inline int j1939cb_is_broadcast(const struct j1939_sk_buff_cb *cb)
 }
 
 extern int j1939_send(struct sk_buff *);
-extern int j1939_recv(struct sk_buff *);
+extern void j1939_recv(struct sk_buff *);
 
 /* stack entries */
-extern int j1939_send_can(struct sk_buff *);
-extern int j1939_recv_promisc(struct sk_buff *);
 extern int j1939_send_transport(struct sk_buff *);
 extern int j1939_recv_transport(struct sk_buff *);
 extern int j1939_fixup_address_claim(struct sk_buff *);
-extern int j1939_recv_address_claim(struct sk_buff *);
-
-extern int j1939_recv_distribute(struct sk_buff *);
+extern void j1939_recv_address_claim(struct sk_buff *, struct j1939_priv *priv);
 
 /* network management */
 /*
  * j1939_ecu_get_register
  * 'create' & 'register' & 'get' new ecu
- * when a matching ecu already exists, the behaviour depends
- * on @return_existing.
- * when @return_existing is 0, -EEXISTS is returned
- * when @return_exsiting is 1, that ecu is 'get' & returned.
- * @flags is only used when creating new ecu.
+ * when a matching ecu already exists, then that is returned
  */
-extern struct j1939_ecu *j1939_ecu_get_register(name_t name, int ifindex,
-		int flags, int return_existing);
-extern void j1939_ecu_unregister(struct j1939_ecu *);
+extern struct j1939_ecu *_j1939_ecu_get_register(struct j1939_priv *priv,
+		name_t name, int create_if_necessary);
+/* unregister must be called with lock held */
+extern void _j1939_ecu_unregister(struct j1939_ecu *);
 
 extern int j1939_netdev_start(struct net_device *);
 extern void j1939_netdev_stop(struct net_device *);
@@ -299,10 +302,5 @@ extern void j1939tp_module_exit(void);
 
 /* CAN protocol */
 extern const struct can_proto j1939_can_proto;
-
-/* rtnetlink */
-extern int j1939rtnl_new_addr(struct sk_buff *, struct nlmsghdr *);
-extern int j1939rtnl_del_addr(struct sk_buff *, struct nlmsghdr *);
-extern int j1939rtnl_dump_addr(struct sk_buff *, struct netlink_callback *);
 
 #endif /* _J1939_PRIV_H_ */
