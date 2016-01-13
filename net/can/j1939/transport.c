@@ -1304,6 +1304,7 @@ static struct session *j1939session_fresh_new(int size,
 		return NULL;
 	}
 	session->skb_iif = rel_skb->skb_iif;
+	skb->dev = rel_skb->dev;
 	/* alloc data area */
 	skb_put(skb, size);
 	return session;
