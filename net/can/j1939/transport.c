@@ -1153,7 +1153,7 @@ int j1939_send_transport(struct sk_buff *skb)
 	/* fill in addresses from names */
 	ret = j1939_fixup_address_claim(skb);
 	if (unlikely(ret))
-		goto failed;
+		return ret;
 
 	/* fix dstflags, it may be used there soon */
 	priv = j1939_priv_find(can_skb_prv(skb)->ifindex);
