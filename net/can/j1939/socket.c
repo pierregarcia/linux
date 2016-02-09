@@ -619,8 +619,10 @@ static int j1939sk_recvmsg(struct socket *sock, struct msghdr *msg,
 		size = skb->len;
 
 	ret = memcpy_to_msg(msg, skb->data, size);
-	if (ret < 0)
-		goto failed_with_skb;
+	if (ret < 0) {
+		skb_free_datagram(sk, skb);
+		return ret;
+	}
 
 	sock_recv_timestamp(msg, sk, skb);
 	skcb = (void *)skb->cb;
@@ -652,10 +654,6 @@ static int j1939sk_recvmsg(struct socket *sock, struct msghdr *msg,
 	skb_free_datagram(sk, skb);
 
 	return size;
-
-failed_with_skb:
-	skb_kill_datagram(sk, skb, flags);
-	return ret;
 }
 
 static int j1939sk_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
