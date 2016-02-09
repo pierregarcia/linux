@@ -618,7 +618,7 @@ static int j1939sk_recvmsg(struct kiocb *iocb, struct socket *sock,
 	else
 		size = skb->len;
 
-	ret = memcpy_toiovec(msg->msg_iov, skb->data, size);
+	ret = memcpy_to_msg(msg, skb->data, size);
 	if (ret < 0)
 		goto failed_with_skb;
 
@@ -705,7 +705,7 @@ static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
 	can_skb_prv(skb)->ifindex = dev->ifindex;
 	skb_reserve(skb, offsetof(struct can_frame, data));
 
-	ret = memcpy_fromiovec(skb_put(skb, size), msg->msg_iov, size);
+	ret = memcpy_from_msg(skb_put(skb, size), msg, size);
 	if (ret < 0)
 		goto free_skb;
 	skb->dev = dev;
