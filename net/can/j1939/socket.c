@@ -601,8 +601,8 @@ no_copy:
 	return ret;
 }
 
-static int j1939sk_recvmsg(struct kiocb *iocb, struct socket *sock,
-			 struct msghdr *msg, size_t size, int flags)
+static int j1939sk_recvmsg(struct socket *sock, struct msghdr *msg,
+		size_t size, int flags)
 {
 	struct sock *sk = sock->sk;
 	struct sk_buff *skb;
@@ -658,8 +658,7 @@ failed_with_skb:
 	return ret;
 }
 
-static int j1939sk_sendmsg(struct kiocb *iocb, struct socket *sock,
-		       struct msghdr *msg, size_t size)
+static int j1939sk_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 {
 	struct sock *sk = sock->sk;
 	struct j1939_sock *jsk = j1939_sk(sk);
